@@ -190,7 +190,7 @@ Alex Lee <alex@example.edu>"></textarea>
       </table>
       <button class="link" id="e-add-aff">+ Add affiliation</button>
 
-      <label style="margin-top:18px">Always a conflict (advisor, students, family, close collaborators)</label>
+      <label style="margin-top:18px">Always a conflict (advisor, students, family, close collaborators). Use <b>Find</b> to link each person to DBLP.</label>
       <table class="affs">
         <thead><tr><th>Name</th><th>Relation</th><th>Note</th><th></th></tr></thead>
         <tbody id="e-rels"></tbody>
@@ -408,13 +408,52 @@ function affRow(a = {}) {
 }
 function relRow(r = {}) {
   const tr = document.createElement("tr");
+  tr.className = "rel";
   const kinds = ["advisor", "student", "family", "collaborator", "other"];
-  tr.innerHTML = `<td><input class="r-name" value="${esc(r.name)}"></td>
+  tr.innerHTML = `<td>
+      <div class="row"><input class="r-name" value="${esc(r.name)}" placeholder="Name">
+        <button class="secondary r-find" style="flex:0 0 auto;padding:7px 10px" title="Search DBLP">Find</button></div>
+      <div class="r-linked muted"></div>
+      <div class="r-suggest suggest hidden"></div></td>
     <td><select class="r-kind">${kinds.map(k => `<option ${k === (r.kind || "advisor") ? "selected" : ""}>${k}</option>`).join("")}</select></td>
     <td><input class="r-note" value="${esc(r.note)}"></td>
-    <td><button class="link" title="Remove">✕</button></td>`;
-  tr.querySelector("button").onclick = () => tr.remove();
+    <td><button class="link r-remove" title="Remove">✕</button></td>`;
+  const name = tr.querySelector(".r-name"), box = tr.querySelector(".r-suggest");
+
+  // The DBLP id lives on the row; it identifies the person even if names differ.
+  const link = (pid, label) => {
+    tr.dataset.dblp = pid || "";
+    tr.querySelector(".r-linked").innerHTML = pid
+      ? `DBLP: <a href="https://dblp.org/pid/${esc(pid)}.html" target="_blank" rel="noopener">${esc(label || pid)}</a>
+         <button class="link r-unlink" title="Unlink">✕</button>` : "";
+    const un = tr.querySelector(".r-unlink");
+    if (un) un.onclick = () => link("");
+  };
+  link(r.dblp, r.dblp);
+
+  const find = async () => {
+    const q = name.value.trim();
+    if (q.length < 2) { name.focus(); return; }
+    try {
+      const people = await api("/api/search?q=" + encodeURIComponent(q));
+      box.innerHTML = people.length ? people.map((p, i) => `<div data-i="${i}">${personLine(p)}</div>`).join("")
+                                    : `<div class="muted">No match in DBLP. The name alone will be used.</div>`;
+      box.classList.remove("hidden");
+      box.querySelectorAll("[data-i]").forEach(d => d.onclick = () => {
+        const p = people[d.dataset.i];
+        name.value = p.name.replace(/\s+\d{4}$/, "");  // "Wei Wang 0002" -> "Wei Wang"
+        link(p.pid, `${p.name}${p.affiliations[0] ? " · " + p.affiliations[0] : ""}`);
+        box.classList.add("hidden");
+      });
+    } catch (e) { box.innerHTML = `<div class="muted">${esc(e.message)}</div>`; box.classList.remove("hidden"); }
+  };
+  tr.querySelector(".r-find").onclick = find;
+  name.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); find(); } });
+  // A typed-over name no longer refers to the linked person.
+  name.addEventListener("input", () => { if (tr.dataset.dblp) link(""); });
+  tr.querySelector(".r-remove").onclick = () => tr.remove();
   $("#e-rels").appendChild(tr);
+  if (!r.name) name.focus();
 }
 $("#e-add-aff").onclick = () => affRow();
 $("#e-add-rel").onclick = () => relRow();
@@ -464,7 +503,7 @@ $("#e-save").onclick = async () => {
     })),
     relations: [...$("#e-rels").rows].map(tr => ({
       name: tr.querySelector(".r-name").value, kind: tr.querySelector(".r-kind").value,
-      note: tr.querySelector(".r-note").value,
+      note: tr.querySelector(".r-note").value, dblp: tr.dataset.dblp || "",
     })),
   };
   try {

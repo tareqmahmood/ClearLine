@@ -86,3 +86,9 @@ def test_new_profile_does_not_overwrite(server):
     with pytest.raises(urllib.error.HTTPError) as e:
         call(server + "/api/profiles", {"name": "Alice Ames"})
     assert "already exists" in json.loads(e.value.read())["error"]
+
+
+def test_relation_dblp_is_saved(server):
+    saved = call(server + "/api/profiles", {
+        "name": "Rel Test", "relations": [{"name": "Wei Wang", "kind": "advisor", "dblp": "3/w2"}]})
+    assert saved["profile"]["relations"][0]["dblp"] == "3/w2"

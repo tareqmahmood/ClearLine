@@ -71,6 +71,7 @@ class Relation:
     name: str
     kind: str = "other"
     note: str = ""
+    dblp: str = ""  # DBLP pid; when set, the person is matched by identity, not by name
 
 
 @dataclass
@@ -99,6 +100,7 @@ class Profile:
                 name=_text(r, "name"),
                 kind=_text(r, "kind") or "other",
                 note=_text(r, "note"),
+                dblp=_text(r, "dblp"),
             ) for r in _tables(d, "relations") if _text(r, "name")],
             slug=slug,
         )
@@ -131,6 +133,8 @@ class Profile:
         for r in self.relations:
             lines += ["", "[[relations]]", f"name = {_q(r.name)}",
                       f"kind = {_q(r.kind)}", f"note = {_q(r.note)}"]
+            if r.dblp:
+                lines.append(f"dblp = {_q(r.dblp)}")
         return "\n".join(lines) + "\n"
 
 

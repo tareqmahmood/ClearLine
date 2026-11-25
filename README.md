@@ -67,7 +67,12 @@ about 4 GB; pass `--delete-dump` to `setup` to remove the 1.1 GB download afterw
    [[relations]]
    name = "John Advisor"
    kind = "advisor"
+   dblp = "12/345"     # optional: match this person by DBLP identity
    ```
+
+   Use *Find* next to each person (or answer the prompt in `profile new`) to
+   link them to DBLP. A linked person is caught under any name variant DBLP
+   knows, and a namesake at another institution is not mistaken for them.
 
 2. **Add your coauthors on the paper.** Pick their profiles, or search DBLP for
    coauthors who have none.

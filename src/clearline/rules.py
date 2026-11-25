@@ -265,7 +265,9 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
             if a.profile:
                 for rel in a.profile.relations:
                     note = f": {rel.note}" if rel.note else ""
-                    if norm_name(rel.name) == norm_name(m.name) or \
+                    if rel.dblp:
+                        _linked_relation(db, r, a, rel, note, mm, prefix)
+                    elif norm_name(rel.name) == norm_name(m.name) or \
                             short_key(rel.name) == short_key(m.name):
                         r.findings.append(Finding(
                             CONFLICT, "relation", a.name,
@@ -297,6 +299,22 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
 
     results.sort(key=lambda r: (-_RANK[r.level], r.member.name.casefold()))
     return results
+
+
+def _linked_relation(db: DBLP, r: Result, a: Author, rel, note: str, mm: _Match, prefix: str) -> None:
+    """A relation linked to a DBLP person: compare identities, not names."""
+    person = db.resolve(rel.dblp)
+    if person is None:
+        return
+    listed = f"listed in {a.name}'s profile as {rel.kind}{note}"
+    if mm.person and mm.person.id == person.id:
+        level = POTENTIAL if mm.how == "loose" else CONFLICT
+        r.findings.append(Finding(level, "relation", a.name, f"{prefix}{person.name}: {listed}."))
+    elif mm.person is None and person.id in mm.namesakes:
+        # The reviewer could not be identified; one of the possibilities is the linked person.
+        r.findings.append(Finding(
+            POTENTIAL, "relation", a.name,
+            f"This name could be {person.name}, {listed}. Check which one the reviewer is."))
 
 
 def _institution_findings(r: Result, a: Author, aff, m: PCMember, match: Person | None,

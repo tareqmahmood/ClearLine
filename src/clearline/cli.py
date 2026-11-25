@@ -101,24 +101,31 @@ def _ask_month(prompt: str, *, end: bool = False) -> str:
             print(f"  {e}")
 
 
+def _pick_dblp(db: DBLP | None, name: str, question: str) -> str:
+    """Search DBLP for a name and let the user pick an entry. Returns a pid, or ""."""
+    if db is None:
+        return _ask(f"{question} (DBLP pid, optional)")
+    people = db.find(name)
+    for i, p in enumerate(people[:9], 1):
+        print(f"  {i}. {_show_person(p, '       ')}")
+    if not people:
+        print("  No match in DBLP.")
+        return ""
+    pick = _ask(f"{question} (number, a DBLP pid, or Enter to skip)", "1" if len(people) == 1 else "")
+    if pick.isdigit() and 1 <= int(pick) <= min(len(people), 9):
+        chosen = people[int(pick) - 1]
+        return chosen.pid or chosen.name
+    return pick
+
+
 def cmd_profile_new(args) -> int:
     print("Create a COI profile. Press Enter to skip optional questions.\n")
     name = _ask("Your name")
-    dblp = ""
     try:
         db = DBLP(db_path())
-        people = db.find(name)
-        for i, p in enumerate(people[:9], 1):
-            print(f"  {i}. {_show_person(p, '       ')}")
-        if people:
-            pick = _ask("Which DBLP entry is you? (number, or a DBLP pid)", "1" if len(people) == 1 else "")
-            if pick.isdigit() and 1 <= int(pick) <= len(people):
-                chosen = people[int(pick) - 1]
-                dblp = chosen.pid or chosen.name
-            else:
-                dblp = pick
     except MissingDatabase:
-        dblp = _ask("DBLP pid or profile URL (optional)")
+        db = None
+    dblp = _pick_dblp(db, name, "Which DBLP entry is you?")
 
     affs = []
     print("\nAffiliations, newest first. Leave the institution empty to finish.")
@@ -131,7 +138,8 @@ def cmd_profile_new(args) -> int:
     rels = []
     print("\nPeople you always conflict with (advisor, students, family). Empty name to finish.")
     while rname := _ask("  Name"):
-        rels.append(Relation(rname, _ask("  Kind", "advisor"), _ask("  Note")))
+        rdblp = _pick_dblp(db, rname, "  Which DBLP entry is this person?")
+        rels.append(Relation(rname, _ask("  Kind", "advisor"), _ask("  Note"), rdblp))
 
     profile = Profile(name=name, dblp=dblp, affiliations=affs, relations=rels)
     path = store().save(profile)
