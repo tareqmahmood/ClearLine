@@ -37,6 +37,65 @@ def short_key(name: str) -> str:
     return f"{tokens[0]} {tokens[-1]}"
 
 
+# Common English nicknames -> the formal name DBLP usually records.
+_NICKNAMES = {
+    "bob": "robert", "rob": "robert", "bobby": "robert", "bill": "william", "will": "william",
+    "billy": "william", "jim": "james", "jimmy": "james", "mike": "michael", "dave": "david",
+    "tom": "thomas", "tommy": "thomas", "chris": "christopher", "alex": "alexander",
+    "sam": "samuel", "ben": "benjamin", "dan": "daniel", "danny": "daniel", "joe": "joseph",
+    "nick": "nicholas", "matt": "matthew", "steve": "steven", "tony": "anthony",
+    "andy": "andrew", "rick": "richard", "rich": "richard", "dick": "richard",
+    "kate": "katherine", "katie": "katherine", "kathy": "katherine", "liz": "elizabeth",
+    "beth": "elizabeth", "jen": "jennifer", "jenny": "jennifer", "jeff": "jeffrey",
+    "greg": "gregory", "ed": "edward", "ted": "edward", "pat": "patrick", "tim": "timothy",
+    "ron": "ronald", "don": "donald", "ken": "kenneth", "larry": "lawrence", "jon": "jonathan",
+    "phil": "philip", "fred": "frederick", "frank": "francis", "hank": "henry",
+    "charlie": "charles", "chuck": "charles", "sue": "susan", "susie": "susan",
+    "meg": "margaret", "maggie": "margaret", "peggy": "margaret", "vicky": "victoria",
+    "becky": "rebecca", "abby": "abigail", "debbie": "deborah", "deb": "deborah",
+    "mandy": "amanda", "manny": "manuel", "nate": "nathan", "zach": "zachary",
+    "josh": "joshua", "jake": "jacob", "max": "maximilian", "sasha": "alexander",
+}
+
+
+_UMLAUT_SPELLING = re.compile(r"([aou])e(?=[a-z])")
+
+
+def _translit(token: str) -> str:
+    """Fold German-style spellings so 'mueller' and 'muller' (from Müller) agree.
+
+    Only inside a word, so 'doe' and 'joe' are left alone."""
+    return _UMLAUT_SPELLING.sub(r"\1", token)
+
+
+def loose_key(name: str) -> str:
+    """A forgiving key for when the exact name finds nobody.
+
+    Expands nicknames, folds umlaut spellings, drops middle initials, and ignores
+    word order: 'Bob Q. Mueller' and 'Müller Robert' both give 'muller robert'.
+    """
+    tokens = norm_name(name).split()
+    if not tokens:
+        return ""
+    if len(tokens) > 2:
+        tokens = [tokens[0]] + [t for t in tokens[1:-1] if len(t) > 1] + [tokens[-1]]
+    # Any position, since the order is not trusted ('Brown Bob').
+    return " ".join(sorted(_translit(_NICKNAMES.get(t, t)) for t in tokens))
+
+
+def initial_key(name: str) -> str:
+    """'Jane Q. Doe' -> 'j doe'. Matched only when a pasted name starts with an initial."""
+    tokens = norm_name(name).split()
+    if len(tokens) < 2:
+        return ""
+    return f"{tokens[0][0]} {_translit(tokens[-1])}"
+
+
+def starts_with_initial(name: str) -> bool:
+    tokens = norm_name(name).split()
+    return len(tokens) >= 2 and len(tokens[0]) == 1
+
+
 def flip_comma_name(name: str) -> str:
     """'Doe, Jane' -> 'Jane Doe'. Leaves other names alone."""
     if name.count(",") == 1:

@@ -358,6 +358,7 @@ function personCard(r, i) {
   const link = r.match?.url ? ` <a href="${esc(r.match.url)}" target="_blank" rel="noopener" class="muted">DBLP</a>` : "";
   const nf = !r.match && !r.candidates.length ? ` <span class="muted">· not found in DBLP</span>` : "";
   const amb = r.candidates.length ? ` <span class="muted">· ${r.candidates.length} DBLP people share this name</span>` : "";
+  const loose = r.match_kind === "loose" && r.match ? ` <span class="muted">· loose match to DBLP's ${esc(r.match.name)}</span>` : "";
   const findings = r.findings.map(f => `
     <div class="finding"><span class="tag ${f.level}">${LABEL[f.level]}</span>${esc(f.message)}
       ${f.papers.length ? `<ul class="papers">${f.papers.map(p =>
@@ -365,7 +366,7 @@ function personCard(r, i) {
     </div>`).join("");
   return `<div class="person ${r.level}">
     <input type="checkbox" data-i="${i}" ${r.level === "conflict" ? "checked" : ""}>
-    <div><span class="name">${esc(m.name)}</span>${m.institution ? ` <span class="inst">· ${esc(m.institution)}</span>` : ""}${link}${nf}${amb}${findings}</div>
+    <div><span class="name">${esc(m.name)}</span>${m.institution ? ` <span class="inst">· ${esc(m.institution)}</span>` : ""}${link}${loose}${nf}${amb}${findings}</div>
   </div>`;
 }
 

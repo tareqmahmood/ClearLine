@@ -10,7 +10,17 @@ import datetime as dt
 from dataclasses import dataclass, field
 
 from .db import DBLP, Person
-from .names import domain_matches, email_domain, inst_similarity, norm_name, same_institution, short_key
+from .names import (
+    domain_matches,
+    email_domain,
+    initial_key,
+    inst_similarity,
+    loose_key,
+    norm_name,
+    same_institution,
+    short_key,
+    starts_with_initial,
+)
 from .pclist import PCMember
 from .profile import Profile
 
@@ -73,6 +83,7 @@ class Result:
     member: PCMember
     match: Person | None = None
     candidates: list[Person] = field(default_factory=list)  # set when the name is ambiguous
+    match_kind: str = ""  # "exact", "loose", or "" when DBLP has nobody by that name
     findings: list[Finding] = field(default_factory=list)
 
     @property
@@ -84,6 +95,7 @@ class Result:
             "member": self.member.to_dict(), "level": self.level,
             "match": self.match.to_dict() if self.match else None,
             "candidates": [c.to_dict() for c in self.candidates],
+            "match_kind": self.match_kind,
             "findings": [f.to_dict() for f in sorted(
                 self.findings, key=lambda f: -_RANK[f.level])],
         }
@@ -112,11 +124,25 @@ def build_authors(db: DBLP, profiles: list[Profile], dblp_ids: list[str]) -> tup
     return authors, warnings
 
 
-def _match_member(db: DBLP, m: PCMember) -> tuple[Person | None, list[Person]]:
-    """Find the DBLP person for a reviewer. Returns (match, ambiguous_candidates)."""
+def _match_member(db: DBLP, m: PCMember) -> tuple[Person | None, list[Person], str]:
+    """Find the DBLP person for a reviewer.
+
+    Returns (match, ambiguous_candidates, how) where how is "exact", "loose", or "".
+    """
+    how = "exact"
     cands = db.find(m.name)
-    if len(cands) <= 1:
-        return (cands[0] if cands else None), []
+    if not cands:
+        cands, how = db.find_loose(m.name), "loose"
+    if not cands:
+        return None, [], ""
+    match, ambiguous = _pick(cands, m)
+    return match, ambiguous, how
+
+
+def _pick(cands: list[Person], m: PCMember) -> tuple[Person | None, list[Person]]:
+    """Choose among people sharing a name, using the reviewer's institution."""
+    if len(cands) == 1:
+        return cands[0], []
     if m.institution:
         def score(p: Person) -> float:
             cur = max((inst_similarity(m.institution, a) for a in p.affiliations), default=0)
@@ -141,16 +167,22 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
     results = []
 
     for m in members:
-        match, cands = _match_member(db, m)
-        r = Result(m, match, cands)
+        match, cands, how = _match_member(db, m)
+        r = Result(m, match, cands, how)
         domain = email_domain(m.email)
 
         for a in authors:
+            n_before = len(r.findings)
             co = coauthors[id(a)]
 
             # The reviewer is one of the authors.
             if match and a.person and match.id == a.person.id:
-                r.findings.append(Finding(CONFLICT, "self", a.name, "This is an author of the paper."))
+                if how == "loose":
+                    r.findings.append(Finding(
+                        POTENTIAL, "self", a.name,
+                        f"Loose name match: {m.name!r} looks like {a.name}, an author of the paper."))
+                else:
+                    r.findings.append(Finding(CONFLICT, "self", a.name, "This is an author of the paper."))
                 continue
 
             # Coauthorship from DBLP.
@@ -175,25 +207,43 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
                         f"{papers[0].year} (before {cutoff_year}).", _paper_list(papers, 3)))
             elif cands:
                 hits = [c for c in cands if c.id in co]
+                if how == "loose" and len(cands) > 1:
+                    # The ambiguity message below already says to check identity.
+                    how_note = f" (loose name match for {m.name!r})"
+                else:
+                    how_note = ""
                 for c in hits:
                     papers = co[c.id]
                     aff = f" ({c.affiliations[0]})" if c.affiliations else ""
                     r.findings.append(Finding(
                         POTENTIAL, "ambiguous-name", a.name,
-                        f"DBLP has {len(cands)} people named {m.name!r}. One of them, "
-                        f"{c.name}{aff}, coauthored {len(papers)} paper(s) with {a.name} "
+                        f"DBLP has {len(cands)} people named like {m.name!r}{how_note}. One of "
+                        f"them, {c.name}{aff}, coauthored {len(papers)} paper(s) with {a.name} "
                         f"(latest {papers[0].year}). Check whether that is this reviewer.",
                         _paper_list(papers, 3)))
+
+            # A loosely matched name is never certain enough for a conflict.
+            if how == "loose" and match:
+                for f in r.findings[n_before:]:
+                    f.level = POTENTIAL
+                    f.message = (f"Loose name match: {m.name!r} looks like DBLP's {match.name!r}. "
+                                 + f.message)
 
             # Relations the author declared in their profile.
             if a.profile:
                 for rel in a.profile.relations:
+                    note = f": {rel.note}" if rel.note else ""
                     if norm_name(rel.name) == norm_name(m.name) or \
                             short_key(rel.name) == short_key(m.name):
-                        note = f": {rel.note}" if rel.note else ""
                         r.findings.append(Finding(
                             CONFLICT, "relation", a.name,
                             f"Listed in {a.name}'s profile as {rel.kind}{note}."))
+                    elif loose_key(rel.name) == loose_key(m.name) or (
+                            starts_with_initial(m.name) and initial_key(rel.name) == initial_key(m.name)):
+                        r.findings.append(Finding(
+                            POTENTIAL, "relation", a.name,
+                            f"Loose name match: {m.name!r} looks like {rel.name!r}, listed in "
+                            f"{a.name}'s profile as {rel.kind}{note}."))
 
             # Institution history from the author's profile.
             if a.profile:

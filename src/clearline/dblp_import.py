@@ -27,12 +27,40 @@ PUB_TAGS = {
 RECORD_TAGS = PUB_TAGS | {"proceedings", "www", "data"}
 TEXT_TAGS = {"author", "title", "year", "journal", "booktitle", "note"}
 
+# 2: names.loose and names.initial for forgiving name matching.
+SCHEMA_VERSION = 2
+
+
+def upgrade(db_path: Path) -> bool:
+    """Bring a database from an older ClearLine up to SCHEMA_VERSION. Returns True if changed."""
+    from .names import initial_key, loose_key
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(names)")}
+        if "loose" in cols:
+            return False
+        sys.stderr.write("Upgrading the DBLP database for loose name matching (about a minute)...\n")
+        conn.executescript("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
+                           "ALTER TABLE names ADD COLUMN loose TEXT;"
+                           "ALTER TABLE names ADD COLUMN initial TEXT;")
+        rows = conn.execute("SELECT id, name FROM names").fetchall()
+        conn.executemany("UPDATE names SET loose=?, initial=? WHERE id=?",
+                         ((loose_key(n), initial_key(n), i) for i, n in rows))
+        conn.executescript("CREATE INDEX names_loose ON names(loose);"
+                           "CREATE INDEX names_initial ON names(initial);")
+        conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
 SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE persons(id INTEGER PRIMARY KEY, pid TEXT, name TEXT NOT NULL);
 CREATE TABLE names(
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, norm TEXT NOT NULL,
-    short TEXT NOT NULL, person_id INTEGER);
+    short TEXT NOT NULL, person_id INTEGER, loose TEXT, initial TEXT);
 CREATE TABLE affiliations(person_id INTEGER NOT NULL, text TEXT NOT NULL, former INTEGER NOT NULL);
 CREATE TABLE pubs(
     id INTEGER PRIMARY KEY, key TEXT NOT NULL, year INTEGER, title TEXT,
@@ -44,6 +72,8 @@ INDEXES = """
 CREATE INDEX names_norm ON names(norm);
 CREATE INDEX names_short ON names(short);
 CREATE INDEX names_person ON names(person_id);
+CREATE INDEX names_loose ON names(loose);
+CREATE INDEX names_initial ON names(initial);
 CREATE INDEX persons_pid ON persons(pid);
 CREATE INDEX aff_person ON affiliations(person_id);
 CREATE INDEX auth_name ON authorship(name_id, pub_id);
@@ -190,7 +220,7 @@ class _DumpParser:
 
     def finish(self):
         """Write names and persons once every record has been seen."""
-        from .names import norm_name, short_key
+        from .names import initial_key, loose_key, norm_name, short_key
 
         self.flush()
         c = self.conn
@@ -206,11 +236,12 @@ class _DumpParser:
                 person_id = next_person
                 next_person += 1
                 self.persons.append((person_id, None, name))
-            rows.append((nid, name, norm_name(name), short_key(name), person_id))
+            rows.append((nid, name, norm_name(name), short_key(name), person_id,
+                         loose_key(name), initial_key(name)))
             if len(rows) >= self.BATCH * 4:
-                c.executemany("INSERT INTO names VALUES (?,?,?,?,?)", rows)
+                c.executemany("INSERT INTO names VALUES (?,?,?,?,?,?,?)", rows)
                 rows.clear()
-        c.executemany("INSERT INTO names VALUES (?,?,?,?,?)", rows)
+        c.executemany("INSERT INTO names VALUES (?,?,?,?,?,?,?)", rows)
         c.executemany("INSERT INTO persons VALUES (?,?,?)", self.persons)
         c.executemany("INSERT INTO affiliations VALUES (?,?,?)", self.affs)
 
@@ -258,6 +289,7 @@ def import_dump(dump: Path, db_path: Path) -> dict:
         "persons": len(handler.persons),
         "seconds": round(time.time() - start),
     }
+    stats["schema"] = SCHEMA_VERSION
     conn.executemany("INSERT INTO meta VALUES (?,?)", [(k, str(v)) for k, v in stats.items()])
     conn.commit()
     conn.execute("ANALYZE")

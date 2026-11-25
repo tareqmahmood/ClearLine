@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from .names import norm_name, short_key
+from .names import initial_key, loose_key, norm_name, short_key, starts_with_initial
 
 
 @dataclass
@@ -61,6 +61,8 @@ class DBLP:
             raise MissingDatabase(
                 f"No DBLP database at {path}. Run `clearline setup` to download and import DBLP.")
         self.path = Path(path)
+        from .dblp_import import upgrade
+        upgrade(self.path)
         self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.person = lru_cache(maxsize=4096)(self._person)
@@ -90,6 +92,16 @@ class DBLP:
         ids = self._ids("norm", norm_name(name), limit)
         if not ids:
             ids = self._ids("short", short_key(name), limit)
+        people = [self.person(i) for i in ids]
+        return sorted((p for p in people if p), key=lambda p: -p.n_pubs)
+
+    def find_loose(self, name: str, limit: int = 50) -> list[Person]:
+        """Forgiving lookup for names that `find` misses: nicknames, umlaut spellings,
+        reversed order, and names given with an initial ('J. Doe')."""
+        if starts_with_initial(name):
+            ids = self._ids("initial", initial_key(name), limit)
+        else:
+            ids = self._ids("loose", loose_key(name), limit)
         people = [self.person(i) for i in ids]
         return sorted((p for p in people if p), key=lambda p: -p.n_pubs)
 

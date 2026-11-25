@@ -90,10 +90,16 @@ with tabs between columns.
 - **Coauthorship** comes from DBLP. DBLP already separates people who share a
   name (`Wei Wang 0001`, `Wei Wang 0002`) and merges name variants, so
   ClearLine works on DBLP persons, not raw strings.
-- **Reviewer names** are matched to DBLP persons. When several people share a
-  name, the reviewer's institution picks the right one using DBLP's
-  affiliation data. If that does not settle it, ClearLine does not guess: it
-  reports a *potential* conflict if any namesake is your coauthor.
+- **Reviewer names** are matched to DBLP persons after normalizing case,
+  accents and punctuation (`Jürgen Müller` = `jurgen muller`), falling back to
+  first and last name only. When several people share a name, the reviewer's
+  institution picks the right one using DBLP's affiliation data. If that does
+  not settle it, ClearLine does not guess: it reports a *potential* conflict
+  if any namesake is your coauthor.
+- **Loose name matches** are tried only when the strict match finds nobody:
+  nicknames (`Bob` = `Robert`), German spellings (`Mueller` = `Müller`),
+  reversed order (`Wang Wei` = `Wei Wang`) and initials (`J. Doe`). Anything
+  found this way is at most a *potential* conflict, labelled as a loose match.
 - **Years:** DBLP records only the year. "Within 2 years" in November 2026
   counts all of 2024, which errs on the side of declaring.
 - **Big collaborations:** papers with more than 30 authors (configurable) only
