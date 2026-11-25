@@ -1,0 +1,36 @@
+[project]
+name = "clearline"
+version = "0.1.0"
+description = "Find your conflicts of interest with reviewers, using DBLP coauthorship and your affiliation history."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Md. Tareq Mahmood", email = "tareq.py@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+keywords = ["conflict of interest", "peer review", "dblp", "coi"]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.scripts]
+clearline = "clearline.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["uv_build>=0.13.9,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 110
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
