@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClearLine — COI checker</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc;
+    --accent: #2f5bd3; --accent-text: #fff;
+    --conflict: #c62f2f; --conflict-bg: #fdeeee;
+    --potential: #a86a00; --potential-bg: #fff6e0;
+    --clear: #2e7d4f; --clear-bg: #eaf6ef;
+    --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --panel: #1f1f1d; --text: #ecebe6; --muted: #9d9c95; --line: #34332f;
+      --accent: #7c9cff; --accent-text: #0d0d0c;
+      --conflict: #ff7b7b; --conflict-bg: #3a1d1d;
+      --potential: #f2b84b; --potential-bg: #382c12;
+      --clear: #6fd39a; --clear-bg: #16301f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 24px; padding: 14px 28px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  nav { display: flex; gap: 4px; }
+  nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px;
+               border-radius: 8px; font: inherit; cursor: pointer; }
+  nav button.active { background: var(--bg); color: var(--text); font-weight: 600; }
+  #dbinfo { margin-left: auto; color: var(--muted); font-size: 13px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 28px 80px; }
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+           padding: 18px; }
+  .panel + .panel { margin-top: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 0 0 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, textarea, select { width: 100%; font: inherit; color: var(--text); background: var(--bg);
+       border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { font-family: var(--mono); font-size: 13px; min-height: 220px; resize: vertical; }
+  button.primary, button.secondary { font: inherit; border-radius: 8px; padding: 9px 16px;
+       cursor: pointer; border: 1px solid transparent; }
+  button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.secondary { background: var(--panel); color: var(--text); border-color: var(--line); }
+  button.link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0;
+       font: inherit; font-size: 13px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .check { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; }
+  .check input { width: auto; margin-top: 4px; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; background: var(--bg);
+          border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; font-size: 13px;
+          margin: 4px 4px 0 0; }
+  .chip button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0; }
+  .suggest { border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; max-height: 280px;
+             overflow: auto; }
+  .suggest div { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  .suggest div:last-child { border-bottom: 0; }
+  .suggest div:hover { background: var(--bg); }
+  .policy { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat { border-radius: var(--radius); padding: 10px 16px; min-width: 130px; }
+  .stat b { display: block; font-size: 24px; line-height: 1.1; }
+  .stat.conflict { background: var(--conflict-bg); color: var(--conflict); }
+  .stat.potential { background: var(--potential-bg); color: var(--potential); }
+  .stat.clear { background: var(--clear-bg); color: var(--clear); }
+  .group { margin-top: 20px; }
+  .group h3 { display: flex; align-items: center; gap: 10px; font-size: 15px; margin: 0 0 8px; }
+  .group h3 .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .person { display: grid; grid-template-columns: 24px 1fr; gap: 8px; padding: 12px 14px;
+            background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+            margin-bottom: 8px; border-left-width: 4px; }
+  .person.conflict { border-left-color: var(--conflict); }
+  .person.potential { border-left-color: var(--potential); }
+  .person.clear { border-left-color: var(--line); padding: 6px 14px; }
+  .person input { width: auto; margin-top: 4px; }
+  .person .name { font-weight: 600; }
+  .person .inst { color: var(--muted); font-weight: 400; }
+  .finding { font-size: 14px; margin-top: 6px; }
+  .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+         border-radius: 4px; padding: 1px 6px; margin-right: 6px; }
+  .tag.conflict { background: var(--conflict-bg); color: var(--conflict); }
+  .tag.potential { background: var(--potential-bg); color: var(--potential); }
+  .papers { margin: 4px 0 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+  .papers a { color: inherit; }
+  a { color: var(--accent); }
+  .warn { background: var(--potential-bg); color: var(--potential); border-radius: 8px;
+          padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
+  .err { background: var(--conflict-bg); color: var(--conflict); border-radius: 8px;
+         padding: 10px 12px; margin-bottom: 12px; }
+  .bar { position: sticky; bottom: 0; display: flex; gap: 12px; align-items: center;
+         background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+         padding: 12px 16px; margin-top: 16px; box-shadow: 0 -4px 16px rgba(0,0,0,.06); }
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  table.affs { width: 100%; border-collapse: collapse; }
+  table.affs td, table.affs th { padding: 4px; vertical-align: top; text-align: left; }
+  table.affs th { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .hidden { display: none !important; }
+  details summary { cursor: pointer; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ClearLine <span>COI checker</span></h1>
+  <nav>
+    <button id="tab-check" class="active">Check reviewers</button>
+    <button id="tab-profiles">Profiles</button>
+  </nav>
+  <div id="dbinfo"></div>
+</header>
+
+<main>
+  <div id="nodb" class="err hidden"></div>
+
+  <!-- ====================================================== CHECK -->
+  <section id="view-check" class="grid">
+    <div>
+      <div class="panel">
+        <h2>Paper authors</h2>
+        <div id="author-profiles"></div>
+        <label>Coauthors without a profile (search DBLP)</label>
+        <input id="author-search" placeholder="Type a name…" autocomplete="off">
+        <div id="author-suggest" class="suggest hidden"></div>
+        <div id="author-chips"></div>
+      </div>
+      <div class="panel">
+        <h2>Venue policy</h2>
+        <div class="policy">
+          <div><label>Coauthored within (years)</label><input id="p-co" type="number" min="0" value="2"></div>
+          <div><label>Same institution within (years)</label><input id="p-inst" type="number" min="0" value="2"></div>
+          <div><label>Ignore papers with more than (authors)</label><input id="p-max" type="number" min="1" value="30"></div>
+          <div><label>As of</label><input id="p-asof" type="month"></div>
+        </div>
+        <p class="muted">Defaults are common, not universal. Check the call for papers.</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Reviewers</h2>
+        <textarea id="pclist" placeholder="Paste the reviewer list from CMT, EasyChair or OpenReview, one per line:
+
+Jane Doe (University of Somewhere)
+John Smith, Some Company
+Alex Lee <alex@example.edu>"></textarea>
+        <div class="row" style="margin-top:10px">
+          <span class="muted" id="pc-count"></span>
+          <button class="primary" id="run" style="flex:0 0 auto">Find conflicts</button>
+        </div>
+      </div>
+      <div id="results"></div>
+    </div>
+  </section>
+
+  <!-- =================================================== PROFILES -->
+  <section id="view-profiles" class="grid hidden">
+    <div class="panel">
+      <h2>Profiles</h2>
+      <div id="profile-list"></div>
+      <button class="secondary" id="new-profile" style="margin-top:12px;width:100%">+ New profile</button>
+      <p class="muted">Stored as TOML files in <span id="home-path"></span>/profiles. They never leave this machine.</p>
+    </div>
+    <div class="panel" id="editor">
+      <h2 id="editor-title">New profile</h2>
+      <div id="editor-msg"></div>
+      <label>Name</label>
+      <input id="e-name" placeholder="Your full name">
+      <label>DBLP identity</label>
+      <div class="row">
+        <input id="e-dblp" placeholder="DBLP pid, e.g. 123/4567">
+        <button class="secondary" id="e-find" style="flex:0 0 auto">Find me in DBLP</button>
+      </div>
+      <div id="e-suggest" class="suggest hidden"></div>
+
+      <label style="margin-top:18px">Affiliations (where you worked or studied)</label>
+      <table class="affs">
+        <thead><tr><th>Institution</th><th>Email domains</th><th>From</th><th>To (empty = now)</th><th></th></tr></thead>
+        <tbody id="e-affs"></tbody>
+      </table>
+      <button class="link" id="e-add-aff">+ Add affiliation</button>
+
+      <label style="margin-top:18px">Always a conflict (advisor, students, family, close collaborators)</label>
+      <table class="affs">
+        <thead><tr><th>Name</th><th>Relation</th><th>Note</th><th></th></tr></thead>
+        <tbody id="e-rels"></tbody>
+      </table>
+      <button class="link" id="e-add-rel">+ Add person</button>
+
+      <div class="row" style="margin-top:20px;justify-content:flex-end">
+        <button class="secondary hidden" id="e-delete" style="flex:0 0 auto">Delete</button>
+        <button class="primary" id="e-save" style="flex:0 0 auto">Save profile</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const state = { profiles: [], selected: new Set(), extraAuthors: [], editing: null, results: null };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json" } });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+// ------------------------------------------------------------- tabs
+function show(view) {
+  for (const v of ["check", "profiles"]) {
+    $(`#view-${v}`).classList.toggle("hidden", v !== view);
+    $(`#tab-${v}`).classList.toggle("active", v === view);
+  }
+}
+$("#tab-check").onclick = () => show("check");
+$("#tab-profiles").onclick = () => show("profiles");
+
+// ------------------------------------------------------------ status
+async function loadStatus() {
+  const s = await api("/api/status");
+  state.profiles = s.profiles;
+  $("#home-path").textContent = s.home;
+  if (s.db) {
+    $("#dbinfo").textContent = `DBLP ${s.db.dump_modified} · ${Number(s.db.publications).toLocaleString()} publications`;
+  } else {
+    $("#nodb").classList.remove("hidden");
+    $("#nodb").innerHTML = `No DBLP database yet. In a terminal run <code>clearline setup</code>, then reload this page.`;
+  }
+  if (state.selected.size === 0 && s.profiles.length) state.selected.add(s.profiles[0].slug);
+  renderAuthorProfiles();
+  renderProfileList();
+  if (!s.profiles.length) { show("profiles"); newProfile(); }
+}
+
+// ------------------------------------------------------ check view
+function renderAuthorProfiles() {
+  const box = $("#author-profiles");
+  if (!state.profiles.length) {
+    box.innerHTML = `<p class="muted">No profiles yet. <button class="link" onclick="show('profiles')">Create yours</button> to include your affiliation history.</p>`;
+    return;
+  }
+  box.innerHTML = state.profiles.map(p => `
+    <label class="check"><input type="checkbox" data-slug="${esc(p.slug)}" ${state.selected.has(p.slug) ? "checked" : ""}>
+      <span><b>${esc(p.name)}</b><br><span class="muted">${esc(p.affiliations[0]?.institution || "no affiliations")}${p.dblp ? "" : " · no DBLP id"}</span></span></label>`).join("");
+  box.querySelectorAll("input").forEach(i => i.onchange = () => {
+    i.checked ? state.selected.add(i.dataset.slug) : state.selected.delete(i.dataset.slug);
+  });
+}
+
+function personLine(p) {
+  const aff = p.affiliations[0] ? ` · ${esc(p.affiliations[0])}` : "";
+  return `<b>${esc(p.name)}</b>${aff}<br><span class="muted">${p.n_pubs} publications, last ${p.last_year ?? "?"}${p.pid ? " · " + esc(p.pid) : ""}</span>`;
+}
+
+function wireSearch(input, box, onPick) {
+  input.addEventListener("input", debounce(async () => {
+    const q = input.value.trim();
+    if (q.length < 3) { box.classList.add("hidden"); return; }
+    try {
+      const people = await api("/api/search?q=" + encodeURIComponent(q));
+      box.innerHTML = people.length ? people.map((p, i) => `<div data-i="${i}">${personLine(p)}</div>`).join("")
+                                    : `<div class="muted">No match in DBLP.</div>`;
+      box.classList.remove("hidden");
+      box.querySelectorAll("[data-i]").forEach(d => d.onclick = () => {
+        onPick(people[d.dataset.i]); box.classList.add("hidden");
+      });
+    } catch (e) { box.innerHTML = `<div class="muted">${esc(e.message)}</div>`; box.classList.remove("hidden"); }
+  }, 250));
+}
+
+wireSearch($("#author-search"), $("#author-suggest"), p => {
+  if (!state.extraAuthors.some(a => a.id === p.id)) state.extraAuthors.push(p);
+  $("#author-search").value = "";
+  renderChips();
+});
+function renderChips() {
+  $("#author-chips").innerHTML = state.extraAuthors.map((p, i) =>
+    `<span class="chip">${esc(p.name)} <button data-i="${i}" title="Remove">✕</button></span>`).join("");
+  $("#author-chips").querySelectorAll("button").forEach(b => b.onclick = () => {
+    state.extraAuthors.splice(b.dataset.i, 1); renderChips();
+  });
+}
+
+$("#pclist").addEventListener("input", () => {
+  const n = $("#pclist").value.split("\n").filter(l => l.trim()).length;
+  $("#pc-count").textContent = n ? `${n} lines` : "";
+});
+
+$("#run").onclick = async () => {
+  const btn = $("#run");
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    const data = await api("/api/check", { method: "POST", body: JSON.stringify({
+      profiles: [...state.selected],
+      authors: state.extraAuthors.map(p => p.pid || p.name),
+      pclist: $("#pclist").value,
+      settings: { coauthor_years: $("#p-co").value, institution_years: $("#p-inst").value,
+                  max_authors: $("#p-max").value, as_of: $("#p-asof").value },
+    })});
+    state.results = data;
+    renderResults();
+  } catch (e) {
+    $("#results").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  } finally { btn.disabled = false; btn.textContent = "Find conflicts"; }
+};
+
+const LABEL = { conflict: "Conflict", potential: "Potential" };
+
+function renderResults() {
+  const d = state.results, s = d.summary;
+  const groups = [
+    ["conflict", "Conflicts", "Selected for you. These match the venue policy above."],
+    ["potential", "Potential conflicts", "Not selected. Read the evidence and decide."],
+    ["clear", "No conflict found", ""],
+  ];
+  let html = d.warnings.map(w => `<div class="warn">${esc(w)}</div>`).join("");
+  html += `<div class="summary">${groups.map(([k, t]) =>
+    `<div class="stat ${k}"><b>${s[k]}</b>${t}</div>`).join("")}</div>`;
+  html += `<p class="muted">Rules: coauthored since ${d.settings.coauthor_cutoff_year}, or shared an institution since ${d.settings.institution_cutoff}. Authors: ${d.authors.map(a => esc(a.name)).join(", ")}.</p>`;
+
+  for (const [level, title, hint] of groups) {
+    const rows = d.results.map((r, i) => [r, i]).filter(([r]) => r.level === level);
+    if (!rows.length) continue;
+    const body = rows.map(([r, i]) => personCard(r, i)).join("");
+    if (level === "clear") {
+      html += `<div class="group"><details><summary>${rows.length} reviewers with no conflict found</summary><div style="margin-top:8px">${body}</div></details></div>`;
+    } else {
+      html += `<div class="group"><h3><span class="dot" style="background:var(--${level})"></span>${title} (${rows.length})</h3><p class="muted" style="margin:0 0 8px">${hint}</p>${body}</div>`;
+    }
+  }
+  html += `<div class="bar"><b id="sel-count"></b><span class="muted" style="flex:1">Tick these in the submission system.</span>
+    <button class="secondary" id="copy-names">Copy names</button>
+    <button class="secondary" id="copy-full">Copy with evidence</button></div>`;
+  $("#results").innerHTML = html;
+  $("#results").querySelectorAll("input[data-i]").forEach(i => i.onchange = updateCount);
+  $("#copy-names").onclick = () => copy(selected().map(r => r.member.name).join("\n"), "#copy-names");
+  $("#copy-full").onclick = () => copy(selected().map(r =>
+    `${r.member.name}${r.member.institution ? " (" + r.member.institution + ")" : ""}\n` +
+    r.findings.map(f => `  - ${f.message}`).join("\n")).join("\n"), "#copy-full");
+  updateCount();
+}
+
+function personCard(r, i) {
+  const m = r.member;
+  const link = r.match?.url ? ` <a href="${esc(r.match.url)}" target="_blank" rel="noopener" class="muted">DBLP</a>` : "";
+  const nf = !r.match && !r.candidates.length ? ` <span class="muted">· not found in DBLP</span>` : "";
+  const amb = r.candidates.length ? ` <span class="muted">· ${r.candidates.length} DBLP people share this name</span>` : "";
+  const findings = r.findings.map(f => `
+    <div class="finding"><span class="tag ${f.level}">${LABEL[f.level]}</span>${esc(f.message)}
+      ${f.papers.length ? `<ul class="papers">${f.papers.map(p =>
+        `<li>${p.year ?? "?"} · <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a> <i>${esc(p.venue)}</i></li>`).join("")}</ul>` : ""}
+    </div>`).join("");
+  return `<div class="person ${r.level}">
+    <input type="checkbox" data-i="${i}" ${r.level === "conflict" ? "checked" : ""}>
+    <div><span class="name">${esc(m.name)}</span>${m.institution ? ` <span class="inst">· ${esc(m.institution)}</span>` : ""}${link}${nf}${amb}${findings}</div>
+  </div>`;
+}
+
+function selected() {
+  return [...$("#results").querySelectorAll("input[data-i]:checked")].map(i => state.results.results[i.dataset.i]);
+}
+function updateCount() { $("#sel-count").textContent = `${selected().length} selected`; }
+async function copy(text, btnSel) {
+  await navigator.clipboard.writeText(text);
+  const b = $(btnSel), old = b.textContent;
+  b.textContent = "Copied"; setTimeout(() => b.textContent = old, 1200);
+}
+
+// --------------------------------------------------- profiles view
+function renderProfileList() {
+  $("#profile-list").innerHTML = state.profiles.length ? state.profiles.map(p => `
+    <div class="check" style="cursor:pointer" data-slug="${esc(p.slug)}">
+      <span><b>${esc(p.name)}</b><br><span class="muted">${p.affiliations.length} affiliations · ${p.relations.length} people${p.dblp ? " · DBLP " + esc(p.dblp) : ""}</span></span>
+    </div>`).join("") : `<p class="muted">None yet.</p>`;
+  $("#profile-list").querySelectorAll("[data-slug]").forEach(d => d.onclick = () =>
+    editProfile(state.profiles.find(p => p.slug === d.dataset.slug)));
+}
+
+function affRow(a = {}) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td><input class="a-inst" value="${esc(a.institution)}" placeholder="University of …"></td>
+    <td><input class="a-dom" value="${esc((a.domains || []).join(", "))}" placeholder="example.edu"></td>
+    <td><input class="a-start" type="month" value="${esc(a.start)}"></td>
+    <td><input class="a-end" type="month" value="${esc(a.end)}"></td>
+    <td><button class="link" title="Remove">✕</button></td>`;
+  tr.querySelector("button").onclick = () => tr.remove();
+  $("#e-affs").appendChild(tr);
+}
+function relRow(r = {}) {
+  const tr = document.createElement("tr");
+  const kinds = ["advisor", "student", "family", "collaborator", "other"];
+  tr.innerHTML = `<td><input class="r-name" value="${esc(r.name)}"></td>
+    <td><select class="r-kind">${kinds.map(k => `<option ${k === (r.kind || "advisor") ? "selected" : ""}>${k}</option>`).join("")}</select></td>
+    <td><input class="r-note" value="${esc(r.note)}"></td>
+    <td><button class="link" title="Remove">✕</button></td>`;
+  tr.querySelector("button").onclick = () => tr.remove();
+  $("#e-rels").appendChild(tr);
+}
+$("#e-add-aff").onclick = () => affRow();
+$("#e-add-rel").onclick = () => relRow();
+
+function editProfile(p) {
+  state.editing = p;
+  $("#editor-title").textContent = p ? `Edit ${p.name}` : "New profile";
+  $("#editor-msg").innerHTML = "";
+  $("#e-name").value = p?.name || "";
+  $("#e-dblp").value = p?.dblp || "";
+  $("#e-affs").innerHTML = ""; $("#e-rels").innerHTML = "";
+  (p?.affiliations?.length ? p.affiliations : [{}]).forEach(affRow);
+  (p?.relations || []).forEach(relRow);
+  $("#e-delete").classList.toggle("hidden", !p);
+}
+function newProfile() { editProfile(null); }
+$("#new-profile").onclick = newProfile;
+
+$("#e-find").onclick = async () => {
+  const q = $("#e-name").value.trim();
+  const box = $("#e-suggest");
+  if (!q) { $("#e-name").focus(); return; }
+  try {
+    const people = await api("/api/search?q=" + encodeURIComponent(q));
+    box.innerHTML = people.length ? people.map((p, i) => `<div data-i="${i}">${personLine(p)}</div>`).join("")
+                                  : `<div class="muted">No match. Try the spelling DBLP uses.</div>`;
+    box.classList.remove("hidden");
+    box.querySelectorAll("[data-i]").forEach(d => d.onclick = () => {
+      const p = people[d.dataset.i];
+      $("#e-dblp").value = p.pid || p.name;
+      // Prefill an empty affiliation table from DBLP's current affiliation.
+      const insts = [...document.querySelectorAll(".a-inst")];
+      if (p.affiliations[0] && insts.length === 1 && !insts[0].value) insts[0].value = p.affiliations[0];
+      box.classList.add("hidden");
+    });
+  } catch (e) { box.innerHTML = `<div class="muted">${esc(e.message)}</div>`; box.classList.remove("hidden"); }
+};
+
+$("#e-save").onclick = async () => {
+  const body = {
+    slug: state.editing?.slug || "",
+    name: $("#e-name").value, dblp: $("#e-dblp").value,
+    affiliations: [...$("#e-affs").rows].map(tr => ({
+      institution: tr.querySelector(".a-inst").value,
+      domains: tr.querySelector(".a-dom").value.split(/[,\s]+/).filter(Boolean),
+      start: tr.querySelector(".a-start").value, end: tr.querySelector(".a-end").value,
+    })),
+    relations: [...$("#e-rels").rows].map(tr => ({
+      name: tr.querySelector(".r-name").value, kind: tr.querySelector(".r-kind").value,
+      note: tr.querySelector(".r-note").value,
+    })),
+  };
+  try {
+    const res = await api("/api/profiles", { method: "POST", body: JSON.stringify(body) });
+    await loadStatus();
+    state.selected.add(res.profile.slug);
+    renderAuthorProfiles();
+    editProfile(state.profiles.find(p => p.slug === res.profile.slug));
+    $("#editor-msg").innerHTML = `<div class="warn" style="background:var(--clear-bg);color:var(--clear)">Saved to ${esc(res.path)}</div>`;
+  } catch (e) { $("#editor-msg").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+};
+
+$("#e-delete").onclick = async () => {
+  if (!state.editing || !confirm(`Delete the profile for ${state.editing.name}?`)) return;
+  await api("/api/profiles/" + encodeURIComponent(state.editing.slug), { method: "DELETE" });
+  state.selected.delete(state.editing.slug);
+  await loadStatus(); newProfile();
+};
+
+$("#p-asof").value = new Date().toISOString().slice(0, 7);
+loadStatus().catch(e => { $("#nodb").classList.remove("hidden"); $("#nodb").textContent = e.message; });
+</script>
+</body>
+</html>
