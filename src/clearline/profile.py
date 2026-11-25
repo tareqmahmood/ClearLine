@@ -83,20 +83,23 @@ class Profile:
 
     @classmethod
     def from_dict(cls, d: dict, slug: str = "") -> Profile:
+        """Build a profile from TOML or JSON data, raising ValueError on a bad shape."""
+        if not isinstance(d, dict):
+            raise ValueError("A profile must be a table of fields.")
         p = cls(
-            name=str(d.get("name", "")).strip(),
-            dblp=str(d.get("dblp", "")).strip(),
+            name=_text(d, "name"),
+            dblp=_text(d, "dblp"),
             affiliations=[Affiliation(
-                institution=str(a.get("institution", "")).strip(),
-                domains=[str(x).strip().lower().lstrip("@") for x in a.get("domains", []) if str(x).strip()],
-                start=str(a.get("start", "")).strip(),
-                end=str(a.get("end", "")).strip(),
-            ) for a in d.get("affiliations", []) if str(a.get("institution", "")).strip()],
+                institution=_text(a, "institution"),
+                domains=_domains(a.get("domains", [])),
+                start=_month(_text(a, "start")),
+                end=_month(_text(a, "end"), end=True),
+            ) for a in _tables(d, "affiliations") if _text(a, "institution")],
             relations=[Relation(
-                name=str(r.get("name", "")).strip(),
-                kind=str(r.get("kind", "other")).strip() or "other",
-                note=str(r.get("note", "")).strip(),
-            ) for r in d.get("relations", []) if str(r.get("name", "")).strip()],
+                name=_text(r, "name"),
+                kind=_text(r, "kind") or "other",
+                note=_text(r, "note"),
+            ) for r in _tables(d, "relations") if _text(r, "name")],
             slug=slug,
         )
         p.validate()
@@ -131,6 +134,37 @@ class Profile:
         return "\n".join(lines) + "\n"
 
 
+def _text(d: dict, key: str) -> str:
+    value = d.get(key, "")
+    if value is None:
+        return ""
+    if not isinstance(value, (str, int)):
+        raise ValueError(f"{key!r} must be text, not {type(value).__name__}.")
+    return str(value).strip()
+
+
+def _tables(d: dict, key: str) -> list[dict]:
+    """A TOML array of tables ([[affiliations]]); anything else is a ValueError."""
+    value = d.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(x, dict) for x in value):
+        raise ValueError(f"{key!r} must be a list of tables: write [[{key}]] in TOML.")
+    return value
+
+
+def _domains(value) -> list[str]:
+    if isinstance(value, str):
+        value = value.replace(",", " ").split()
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ValueError("'domains' must be a list of email domains, like [\"wisc.edu\"].")
+    return [x.strip().lower().lstrip("@") for x in value if x.strip()]
+
+
+def _month(text: str, *, end: bool = False) -> str:
+    """Normalize '2021' or '2021-9' to 'YYYY-MM'. A bare end year means December."""
+    date = parse_month(text, end=end)
+    return f"{date.year:04d}-{date.month:02d}" if date else ""
+
+
 def _q(s: str) -> str:
     """A TOML basic string."""
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
@@ -144,29 +178,42 @@ def slugify(name: str) -> str:
 class ProfileStore:
     def __init__(self, directory: Path):
         self.dir = Path(directory)
+        self.errors: list[tuple[Path, str]] = []  # files list() could not read
 
     def list(self) -> list[Profile]:
+        """Every readable profile. Broken files are skipped and recorded in self.errors."""
+        self.errors = []
         if not self.dir.exists():
             return []
         out = []
         for f in sorted(self.dir.glob("*.toml")):
             try:
-                out.append(self.load(f.stem))
-            except (ValueError, tomllib.TOMLDecodeError):
-                continue  # a broken file should not hide the others
+                out.append(self.load_file(f))
+            except (ValueError, OSError) as e:
+                self.errors.append((f, str(e)))
         return out
 
     def path(self, slug: str) -> Path:
         return self.dir / f"{slugify(slug)}.toml"
 
-    def load(self, slug_or_path: str) -> Profile:
-        f = Path(slug_or_path)
-        if not (f.suffix == ".toml" and f.exists()):
-            f = self.path(slug_or_path)
+    def load(self, slug: str) -> Profile:
+        """A profile in this store, by name or slug. Paths are not accepted."""
+        f = self.path(slug)
         if not f.exists():
-            raise FileNotFoundError(f"No profile {slug_or_path!r} (looked for {f}).")
-        with open(f, "rb") as fh:
-            return Profile.from_dict(tomllib.load(fh), slug=f.stem)
+            raise FileNotFoundError(f"No profile {slug!r} (looked for {f}).")
+        return self.load_file(f)
+
+    def load_file(self, path: Path) -> Profile:
+        path = Path(path)
+        try:
+            with open(path, "rb") as fh:
+                data = tomllib.load(fh)
+        except tomllib.TOMLDecodeError as e:
+            raise ValueError(f"{path}: {e}") from None
+        try:
+            return Profile.from_dict(data, slug=path.stem)
+        except ValueError as e:
+            raise ValueError(f"{path}: {e}") from None
 
     def save(self, profile: Profile) -> Path:
         profile.validate()

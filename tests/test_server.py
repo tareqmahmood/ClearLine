@@ -31,7 +31,7 @@ def test_page_and_status(server):
     with urllib.request.urlopen(server + "/") as r:
         assert b"ClearLine" in r.read()
     s = call(server + "/api/status")
-    assert s["db"]["publications"] == "4"
+    assert s["db"]["publications"] == "7"
     assert s["profiles"] == []
 
 
@@ -57,3 +57,32 @@ def test_rejects_cross_site_requests(server):
     with pytest.raises(urllib.error.HTTPError) as e:
         call(server + "/api/profiles", {"name": "Evil"}, headers={"Origin": "https://evil.example"})
     assert e.value.code == 403
+
+
+@pytest.mark.parametrize("body", [
+    [1, 2],
+    {"profiles": "x", "pclist": "Bob Brown"},
+    {"authors": ["1/alice"], "pclist": "Bob Brown", "settings": {"coauthor_years": "two"}},
+    {"authors": ["1/alice"], "pclist": "Bob Brown", "settings": "nope"},
+    {"profiles": ["../../etc/passwd"], "pclist": "Bob Brown"},
+])
+def test_bad_requests_get_json_errors(server, body):
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(server + "/api/check", body)
+    assert e.value.code == 400
+    assert json.loads(e.value.read())["error"]
+
+
+def test_empty_and_null_settings_use_defaults(server):
+    out = call(server + "/api/check", {
+        "authors": ["1/alice"], "pclist": "Bob Brown",
+        "settings": {"coauthor_years": "", "institution_years": None, "as_of": "2026-11"}})
+    assert out["settings"]["coauthor_years"] == 2
+    assert out["results"][0]["level"] == "conflict"
+
+
+def test_new_profile_does_not_overwrite(server):
+    call(server + "/api/profiles", {"name": "Alice Ames"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(server + "/api/profiles", {"name": "Alice Ames"})
+    assert "already exists" in json.loads(e.value.read())["error"]

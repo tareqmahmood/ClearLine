@@ -10,11 +10,16 @@ _NON_ALNUM = re.compile(r"[^a-z0-9 ]+")
 _SPACES = re.compile(r"\s+")
 
 
+# Letters that Unicode does not decompose into a base letter plus an accent.
+_LETTERS = str.maketrans({"ß": "ss", "ø": "o", "ł": "l", "ı": "i", "đ": "d", "ð": "d",
+                          "æ": "ae", "œ": "oe", "þ": "th", "ħ": "h", "ŀ": "l"})
+
+
 def fold(text: str) -> str:
     """Lowercase, strip accents and punctuation, collapse whitespace."""
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
-    text = text.casefold().replace("ß", "ss").replace("ø", "o").replace("ł", "l")
+    text = text.casefold().translate(_LETTERS)
     text = text.replace("-", " ").replace(".", " ").replace("'", "")
     text = _NON_ALNUM.sub(" ", text)
     return _SPACES.sub(" ", text).strip()
@@ -105,36 +110,55 @@ def flip_comma_name(name: str) -> str:
     return name
 
 
-_INST_STOP = {
-    "the", "of", "at", "and", "for", "in", "de", "di", "der", "des", "la", "le",
-    "university", "univ", "universitat", "universite", "universidad", "universita",
-    "institute", "inst", "college", "school", "department", "dept", "lab", "labs",
-    "laboratory", "laboratories", "research", "center", "centre", "inc", "ltd",
-    "llc", "corp", "corporation", "company", "co", "gmbh", "technology",
-    "technologies", "science", "sciences", "computer", "computing", "national",
-}
+# ----------------------------------------------------------------- institutions
+#
+# Institution names are compared as ordered word sequences, not word sets, so
+# "Washington University" and "University of Washington" stay apart. Generic words
+# ("university", "research") are kept for that ordering, but a match needs at least
+# one distinctive word in common.
 
-_INST_ALIASES = {
-    "uw madison": "university of wisconsin madison",
-    "uiuc": "university of illinois urbana champaign",
-    "cmu": "carnegie mellon university",
-    "mit": "massachusetts institute of technology",
-    "ucb": "university of california berkeley",
-    "uc berkeley": "university of california berkeley",
-    "ucla": "university of california los angeles",
-    "ucsd": "university of california san diego",
-    "nus": "national university of singapore",
-    "ntu": "nanyang technological university",
-    "hkust": "hong kong university of science and technology",
-    "cuhk": "chinese university of hong kong",
-    "epfl": "ecole polytechnique federale de lausanne",
-    "eth zurich": "eth zurich",
-    "tum": "technical university of munich",
-    "kaist": "korea advanced institute of science and technology",
-    "iisc": "indian institute of science",
-    "msr": "microsoft research",
+_INST_DROP = {
+    "the", "of", "at", "and", "for", "in", "de", "di", "der", "des", "la", "le", "du",
+    "del", "da", "fur", "inc", "ltd", "llc", "corp", "corporation", "co", "gmbh", "ag",
+    "sa", "plc", "bv",
 }
-
+_INST_GENERIC = {
+    "university", "institute", "college", "school", "research", "laboratory", "lab", "labs",
+    "center", "centre", "technology", "technologies", "science", "sciences", "technical",
+    "polytechnic", "academy", "national", "state", "computer", "computing", "engineering",
+    "department", "faculty", "group", "company", "foundation",
+}
+# Abbreviations expanded word by word ("MIT CSAIL" -> "massachusetts institute ...").
+_INST_WORDS = {
+    "univ": "university", "uni": "university", "universitat": "university",
+    "universite": "university", "universidad": "university", "universita": "university",
+    "universiteit": "university", "inst": "institute", "tech": "technology",
+    "tu": "technical university", "mit": "massachusetts institute technology",
+    "cmu": "carnegie mellon university", "msr": "microsoft research",
+    "unsw": "university new south wales", "uw": "university washington",
+    "nus": "national university singapore", "ntu": "nanyang technological university",
+    "hku": "university hong kong", "hkust": "hong kong university science technology",
+    "cuhk": "chinese university hong kong", "kaist": "korea advanced institute science technology",
+    "epfl": "ecole polytechnique federale lausanne", "iisc": "indian institute science",
+    "tum": "technical university munich", "uiuc": "university illinois urbana champaign",
+    "ucla": "uc los angeles", "ucsd": "uc san diego", "ucsb": "uc santa barbara",
+    "uci": "uc irvine", "ucb": "uc berkeley", "ucd": "uc davis",
+}
+# Whole-name aliases that word-by-word expansion cannot express.
+_INST_PHRASES = {
+    "uw madison": "university wisconsin madison",
+    "georgia tech": "georgia institute technology",
+    "virginia tech": "virginia polytechnic institute state university",
+    "eth": "eth zurich",
+    "tu munich": "technical university munich",
+}
+# Companies: different labs or sites of one company are "related".
+_COMPANIES = {
+    "google", "microsoft", "amazon", "meta", "facebook", "ibm", "oracle", "alibaba", "huawei",
+    "tencent", "baidu", "bytedance", "databricks", "snowflake", "sap", "intel", "nvidia",
+    "apple", "adobe", "salesforce", "samsung", "nec", "ntt", "hitachi", "fujitsu", "yahoo",
+    "linkedin", "uber", "twitter", "netflix", "vmware", "cisco", "hp", "hpe", "siemens",
+}
 
 _LOCATION = {
     "usa", "us", "uk", "united", "states", "kingdom", "america", "china", "prc", "germany",
@@ -149,52 +173,83 @@ _LOCATION = {
     "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt",
     "va", "wa", "wv", "wi", "wy", "dc",
 }
-_DEPT = re.compile(r"^\s*(dept|department|school|faculty|division|group|chair)\b", re.IGNORECASE)
+_DEPT = re.compile(r"^\s*(dept|department|school|faculty|division|group|chair|lab|laboratory)\b",
+                   re.IGNORECASE)
+_UC = re.compile(r"\buniversity of california\s*,?\s*", re.IGNORECASE)
 
 
-def inst_tokens(text: str) -> set[str]:
-    """Distinctive tokens of an institution name, without departments or locations."""
-    folded = fold(text)
-    if folded in _INST_ALIASES:
-        folded = _INST_ALIASES[folded]
-    else:
-        segments = [s for s in text.split(",") if s.strip() and not _DEPT.match(s)]
-        kept = []
-        for s in segments:
-            f = fold(s)
-            f = _INST_ALIASES.get(f, f)
-            words = {w for w in f.split() if not w.isdigit()}  # drop ZIP codes
-            if words <= _LOCATION:  # a segment that is only a place: "USA", "CA 94305"
-                continue
-            kept.append(f)
-        folded = " ".join(kept) or folded
-    return {t for t in folded.split()
-            if t not in _INST_STOP and not t.isdigit() and len(t) > 1}
+def _inst_words(segment: str) -> tuple[str, ...]:
+    text = fold(segment)
+    text = _INST_PHRASES.get(text, text)
+    words = []
+    for w in text.split():
+        words.extend(_INST_WORDS.get(w, w).split())
+    text = " ".join(w for w in words if w not in _INST_DROP and not w.isdigit())
+    return tuple(_INST_PHRASES.get(text, text).split())
 
 
-def inst_similarity(a: str, b: str) -> float:
-    """How alike two institution names are, 0..1.
+def inst_segments(text: str) -> list[tuple[str, ...]]:
+    """Comma-separated parts of an institution, minus departments and pure locations.
 
-    Jaccard similarity of distinctive tokens, raised to 1.0 when one name's tokens are all
-    in the other and there are at least two of them ("Wisconsin Madison" inside
-    "Wisconsin Madison Madison"). A single shared token such as "california" is not
-    enough on its own, so UC Berkeley and UCLA stay apart.
+    'Dept. of CS, Stanford University, Stanford, CA 94305, USA'
+        -> [('stanford', 'university'), ('stanford',)]
     """
-    ta, tb = inst_tokens(a), inst_tokens(b)
-    if not ta or not tb:
-        return 0.0
-    small, big = sorted((ta, tb), key=len)
-    if len(small) >= 2 and small <= big:
-        return 1.0
-    return len(ta & tb) / len(ta | tb)
+    text = _UC.sub("UC ", text)  # "University of California, Berkeley" -> "UC Berkeley"
+    out = []
+    for seg in text.split(","):
+        if not seg.strip() or _DEPT.match(seg):
+            continue
+        if {w for w in fold(seg).split() if not w.isdigit()} <= _LOCATION:
+            continue  # "USA", "CA 94305"
+        words = _inst_words(seg)
+        if words:
+            out.append(words)
+    return out
 
 
-def same_institution(a: str, b: str, threshold: float = 0.6) -> bool:
+def _distinctive(words: tuple[str, ...]) -> bool:
+    return any(w not in _INST_GENERIC for w in words)
+
+
+def _is_prefix(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
+    return len(short) < len(long) and long[:len(short)] == short and _distinctive(short)
+
+
+def inst_match(a: str, b: str) -> str | None:
+    """'same', 'related', or None.
+
+    same:    the main part of the names agree ("UCLA" and "University of California,
+             Los Angeles, USA"; "Stanford University" and "Stanford University, Stanford, CA").
+    related: one is a unit or site of the other ("MIT CSAIL" and "MIT"; "Microsoft
+             Research Asia" and "Microsoft"; "University of Wisconsin" and
+             "University of Wisconsin-Madison"). Reported as a potential conflict.
+    """
     if not a or not b:
-        return False
-    if fold(a) == fold(b):
-        return True
-    return inst_similarity(a, b) >= threshold
+        return None
+    sa, sb = inst_segments(a), inst_segments(b)
+    if not sa or not sb:
+        return None
+    pa, pb = sa[0], sb[0]
+    if pa == pb and _distinctive(pa):
+        return "same"
+    wa = tuple(w for s in sa for w in s)
+    wb = tuple(w for s in sb for w in s)
+    if _is_prefix(pa, pb) or _is_prefix(pb, pa) or _is_prefix(wa, wb) or _is_prefix(wb, wa):
+        return "related"
+    if pa[0] in _COMPANIES and pa[0] == pb[0]:
+        return "related"
+    if any(x == y and _distinctive(x) for x in sa for y in sb):
+        return "related"
+    return None
+
+
+def same_institution(a: str, b: str) -> bool:
+    return inst_match(a, b) == "same"
+
+
+def inst_score(a: str, b: str) -> float:
+    """For choosing between people who share a name: 1 same, 0.7 related, 0 otherwise."""
+    return {"same": 1.0, "related": 0.7}.get(inst_match(a, b), 0.0)
 
 
 def email_domain(email: str) -> str:

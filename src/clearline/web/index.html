@@ -233,11 +233,16 @@ async function loadStatus() {
   const s = await api("/api/status");
   state.profiles = s.profiles;
   $("#home-path").textContent = s.home;
+  if (s.profile_errors.length) {
+    $("#nodb").classList.remove("hidden");
+    $("#nodb").innerHTML = "Some profile files could not be read and were skipped:<br>" +
+      s.profile_errors.map(esc).join("<br>");
+  }
   if (s.db) {
     $("#dbinfo").textContent = `DBLP ${s.db.dump_modified} · ${Number(s.db.publications).toLocaleString()} publications`;
   } else {
     $("#nodb").classList.remove("hidden");
-    $("#nodb").innerHTML = `No DBLP database yet. In a terminal run <code>clearline setup</code>, then reload this page.`;
+    $("#nodb").innerHTML = esc(s.db_error) + " Then reload this page.";
   }
   if (state.selected.size === 0 && s.profiles.length) state.selected.add(s.profiles[0].slug);
   renderAuthorProfiles();
@@ -356,9 +361,10 @@ function renderResults() {
 function personCard(r, i) {
   const m = r.member;
   const link = r.match?.url ? ` <a href="${esc(r.match.url)}" target="_blank" rel="noopener" class="muted">DBLP</a>` : "";
-  const nf = !r.match && !r.candidates.length ? ` <span class="muted">· not found in DBLP</span>` : "";
-  const amb = r.candidates.length ? ` <span class="muted">· ${r.candidates.length} DBLP people share this name</span>` : "";
-  const loose = r.match_kind === "loose" && r.match ? ` <span class="muted">· loose match to DBLP's ${esc(r.match.name)}</span>` : "";
+  const nf = !r.n_namesakes ? ` <span class="muted">· not found in DBLP</span>` : "";
+  const amb = r.n_namesakes > 1 ? ` <span class="muted">· ${r.n_namesakes} DBLP people share this name</span>` : "";
+  const loose = r.match_kind === "loose" && r.match ? ` <span class="muted">· loose match to DBLP's ${esc(r.match.name)}</span>`
+    : r.match_kind === "middle-name" && r.match ? ` <span class="muted">· matched as ${esc(r.match.name)}</span>` : "";
   const findings = r.findings.map(f => `
     <div class="finding"><span class="tag ${f.level}">${LABEL[f.level]}</span>${esc(f.message)}
       ${f.papers.length ? `<ul class="papers">${f.papers.map(p =>

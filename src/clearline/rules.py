@@ -14,10 +14,10 @@ from .names import (
     domain_matches,
     email_domain,
     initial_key,
-    inst_similarity,
+    inst_match,
+    inst_score,
     loose_key,
     norm_name,
-    same_institution,
     short_key,
     starts_with_initial,
 )
@@ -69,7 +69,7 @@ class Author:
 @dataclass
 class Finding:
     level: str
-    kind: str  # coauthor, institution, email-domain, relation, self, ambiguous-name
+    kind: str  # coauthor, namesake, institution, email-domain, relation, self
     author: str
     message: str
     papers: list[dict] = field(default_factory=list)
@@ -81,9 +81,10 @@ class Finding:
 @dataclass
 class Result:
     member: PCMember
-    match: Person | None = None
-    candidates: list[Person] = field(default_factory=list)  # set when the name is ambiguous
-    match_kind: str = ""  # "exact", "loose", or "" when DBLP has nobody by that name
+    match: Person | None = None  # the DBLP person chosen for this reviewer, if any
+    candidates: list[Person] = field(default_factory=list)  # namesakes who are coauthors
+    match_kind: str = ""  # "exact", "middle-name", "loose", or "" when DBLP has nobody
+    n_namesakes: int = 0  # how many DBLP people the name could refer to
     findings: list[Finding] = field(default_factory=list)
 
     @property
@@ -95,7 +96,7 @@ class Result:
             "member": self.member.to_dict(), "level": self.level,
             "match": self.match.to_dict() if self.match else None,
             "candidates": [c.to_dict() for c in self.candidates],
-            "match_kind": self.match_kind,
+            "match_kind": self.match_kind, "n_namesakes": self.n_namesakes,
             "findings": [f.to_dict() for f in sorted(
                 self.findings, key=lambda f: -_RANK[f.level])],
         }
@@ -107,15 +108,15 @@ def build_authors(db: DBLP, profiles: list[Profile], dblp_ids: list[str]) -> tup
     for p in profiles:
         person = db.resolve(p.dblp) if p.dblp else None
         if p.dblp and person is None:
-            warnings.append(f"Profile {p.name!r}: DBLP id {p.dblp!r} not found; "
-                            "coauthorship checks are skipped for this author.")
+            warnings.append(f"Profile {p.name!r}: DBLP id {p.dblp!r} not found or ambiguous; "
+                            "coauthorship checks are skipped for this author. Use the DBLP pid.")
         elif not p.dblp:
             warnings.append(f"Profile {p.name!r} has no DBLP id; coauthorship checks are skipped.")
         authors.append(Author(p.name, person, p))
     for ident in dblp_ids:
         person = db.resolve(ident)
         if person is None:
-            n = len(db.find(ident))
+            n = len(db.ids_exact(ident) or db.ids_short(ident))
             hint = f"{n} DBLP people match that name; use a pid or a name with its 0001 suffix" \
                 if n > 1 else "no DBLP match"
             warnings.append(f"Author {ident!r}: {hint}.")
@@ -124,39 +125,62 @@ def build_authors(db: DBLP, profiles: list[Profile], dblp_ids: list[str]) -> tup
     return authors, warnings
 
 
-def _match_member(db: DBLP, m: PCMember) -> tuple[Person | None, list[Person], str]:
-    """Find the DBLP person for a reviewer.
+@dataclass
+class _Match:
+    person: Person | None  # chosen DBLP person
+    how: str  # "exact", "middle-name", "loose", or ""
+    namesakes: list[int]  # every other DBLP person the name could be
+    by_institution: bool  # chosen among namesakes by the reviewer's institution
 
-    Returns (match, ambiguous_candidates, how) where how is "exact", "loose", or "".
+
+def _match_member(db: DBLP, m: PCMember) -> _Match:
+    """Find the DBLP person for a reviewer, and every namesake that could also be them.
+
+    Exact (normalized) names come first. People who differ only by a middle name are
+    kept as namesakes, so "Michael Franklin" never hides "Michael J. Franklin". Loose
+    matches (nicknames, spellings, order, initials) are used only when nothing else is.
     """
-    how = "exact"
-    cands = db.find(m.name)
-    if not cands:
-        cands, how = db.find_loose(m.name), "loose"
-    if not cands:
-        return None, [], ""
-    match, ambiguous = _pick(cands, m)
-    return match, ambiguous, how
+    exact = db.ids_exact(m.name)
+    short = [i for i in db.ids_short(m.name) if i not in set(exact)]
+    if exact:
+        pool, how, extra = exact, "exact", short
+    elif short:
+        pool, how, extra = short, "middle-name", []
+    else:
+        pool, how, extra = db.ids_loose(m.name), "loose", []
+    if not pool:
+        return _Match(None, "", [], False)
+    chosen, by_institution = _pick(db, pool, m)
+    namesakes = [i for i in pool + extra if i != chosen]
+    return _Match(db.person(chosen) if chosen else None, how, namesakes, by_institution)
 
 
-def _pick(cands: list[Person], m: PCMember) -> tuple[Person | None, list[Person]]:
+def _pick(db: DBLP, pool: list[int], m: PCMember) -> tuple[int | None, bool]:
     """Choose among people sharing a name, using the reviewer's institution."""
-    if len(cands) == 1:
-        return cands[0], []
-    if m.institution:
-        def score(p: Person) -> float:
-            cur = max((inst_similarity(m.institution, a) for a in p.affiliations), default=0)
-            old = max((inst_similarity(m.institution, a) for a in p.former_affiliations), default=0)
-            return max(cur, 0.8 * old)
-        scored = sorted(((score(p), p) for p in cands), key=lambda t: -t[0])
-        best, runner_up = scored[0][0], scored[1][0]
-        if best >= 0.5 and best - runner_up >= 0.2:
-            return scored[0][1], []
-    return None, cands
+    if len(pool) == 1:
+        return pool[0], False
+    if not m.institution:
+        return None, False
+    affs = db.affiliations_of(pool)
+
+    def score(i: int) -> float:
+        cur, old = affs.get(i, ([], []))
+        return max([inst_score(m.institution, a) for a in cur]
+                   + [0.8 * inst_score(m.institution, a) for a in old] + [0.0])
+
+    scored = sorted(((score(i), i) for i in pool), reverse=True)
+    (best, best_id), (runner_up, _) = scored[0], scored[1]
+    if best >= 0.7 and best - runner_up >= 0.2:
+        return best_id, True
+    return None, False
 
 
 def _paper_list(papers, limit=5) -> list[dict]:
     return [p.to_dict() for p in papers[:limit]]
+
+
+def _first_aff(p: Person) -> str:
+    return f" ({p.affiliations[0]})" if p.affiliations else ""
 
 
 def check(db: DBLP, authors: list[Author], members: list[PCMember],
@@ -164,12 +188,20 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
     s = settings or Settings()
     cutoff_year = s.coauthor_cutoff_year
     coauthors = {id(a): db.coauthors(a.person.id) if a.person else {} for a in authors}
+    author_ids = {a.person.id for a in authors if a.person}
     results = []
 
     for m in members:
-        match, cands, how = _match_member(db, m)
-        r = Result(m, match, cands, how)
+        mm = _match_member(db, m)
+        match, how = mm.person, mm.how
+        r = Result(m, match, [], how, len(mm.namesakes) + (1 if match else 0))
         domain = email_domain(m.email)
+        if how == "loose" and match:
+            prefix = f"Loose name match: {m.name!r} looks like DBLP's {match.name!r}. "
+        elif how == "middle-name" and match:
+            prefix = f"Matched ignoring middle names (DBLP: {match.name!r}). "
+        else:
+            prefix = ""
 
         for a in authors:
             n_before = len(r.findings)
@@ -177,15 +209,12 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
 
             # The reviewer is one of the authors.
             if match and a.person and match.id == a.person.id:
-                if how == "loose":
-                    r.findings.append(Finding(
-                        POTENTIAL, "self", a.name,
-                        f"Loose name match: {m.name!r} looks like {a.name}, an author of the paper."))
-                else:
-                    r.findings.append(Finding(CONFLICT, "self", a.name, "This is an author of the paper."))
+                level = POTENTIAL if how == "loose" else CONFLICT
+                r.findings.append(Finding(level, "self", a.name,
+                                          f"{prefix}This is an author of the paper."))
                 continue
 
-            # Coauthorship from DBLP.
+            # Coauthorship with the chosen DBLP person.
             if match and match.id in co:
                 papers = co[match.id]
                 recent = [p for p in papers if (p.year or 0) >= cutoff_year]
@@ -193,41 +222,44 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
                 if small:
                     r.findings.append(Finding(
                         CONFLICT, "coauthor", a.name,
-                        f"Coauthored {len(small)} paper(s) with {a.name} since {cutoff_year} "
+                        f"{prefix}Coauthored {len(small)} paper(s) with {a.name} since {cutoff_year} "
                         f"(latest {small[0].year}).", _paper_list(small)))
                 elif recent:
                     r.findings.append(Finding(
                         POTENTIAL, "coauthor", a.name,
-                        f"Coauthored with {a.name} since {cutoff_year}, but only on papers with "
-                        f"more than {s.max_authors} authors.", _paper_list(recent)))
+                        f"{prefix}Coauthored with {a.name} since {cutoff_year}, but only on papers "
+                        f"with more than {s.max_authors} authors.", _paper_list(recent)))
                 else:
                     r.findings.append(Finding(
                         POTENTIAL, "coauthor", a.name,
-                        f"Coauthored {len(papers)} paper(s) with {a.name}, most recently in "
+                        f"{prefix}Coauthored {len(papers)} paper(s) with {a.name}, most recently in "
                         f"{papers[0].year} (before {cutoff_year}).", _paper_list(papers, 3)))
-            elif cands:
-                hits = [c for c in cands if c.id in co]
-                if how == "loose" and len(cands) > 1:
-                    # The ambiguity message below already says to check identity.
-                    how_note = f" (loose name match for {m.name!r})"
-                else:
-                    how_note = ""
-                for c in hits:
-                    papers = co[c.id]
-                    aff = f" ({c.affiliations[0]})" if c.affiliations else ""
-                    r.findings.append(Finding(
-                        POTENTIAL, "ambiguous-name", a.name,
-                        f"DBLP has {len(cands)} people named like {m.name!r}{how_note}. One of "
-                        f"them, {c.name}{aff}, coauthored {len(papers)} paper(s) with {a.name} "
-                        f"(latest {papers[0].year}). Check whether that is this reviewer.",
-                        _paper_list(papers, 3)))
 
             # A loosely matched name is never certain enough for a conflict.
-            if how == "loose" and match:
+            if how == "loose":
                 for f in r.findings[n_before:]:
                     f.level = POTENTIAL
-                    f.message = (f"Loose name match: {m.name!r} looks like DBLP's {match.name!r}. "
-                                 + f.message)
+
+            # Every other DBLP person with this name who coauthored with the author.
+            for i in mm.namesakes:
+                if i not in co or i in author_ids:
+                    continue
+                c, papers = db.person(i), co[i]
+                if c not in r.candidates:
+                    r.candidates.append(c)
+                shared = (f"coauthored {len(papers)} paper(s) with {a.name} "
+                          f"(latest {papers[0].year})")
+                if match:
+                    why = " by institution" if mm.by_institution else ""
+                    msg = (f"{prefix}Matched to DBLP's {match.name!r}{why}, but another DBLP person "
+                           f"with this name, {c.name}{_first_aff(c)}, {shared}. "
+                           f"Check that the reviewer is not {c.name}.")
+                else:
+                    loose = " (loose name match)" if how == "loose" else ""
+                    msg = (f"DBLP has {r.n_namesakes} people named like {m.name!r}{loose}. "
+                           f"One of them, {c.name}{_first_aff(c)}, {shared}. "
+                           "Check whether that is this reviewer.")
+                r.findings.append(Finding(POTENTIAL, "namesake", a.name, msg, _paper_list(papers, 3)))
 
             # Relations the author declared in their profile.
             if a.profile:
@@ -248,29 +280,13 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
             # Institution history from the author's profile.
             if a.profile:
                 for aff in a.profile.affiliations:
-                    recent = aff.active_since(s.institution_cutoff)
-                    level = CONFLICT if recent else POTENTIAL
-                    when = f"{a.name} was there {aff.span()}"
-                    if m.institution and same_institution(m.institution, aff.institution):
-                        r.findings.append(Finding(
-                            level, "institution", a.name,
-                            f"Reviewer lists {m.institution!r}; {when} ({aff.institution})."))
-                    elif domain and any(domain_matches(domain, d) for d in aff.domains):
-                        r.findings.append(Finding(
-                            level, "email-domain", a.name,
-                            f"Reviewer email domain {domain} matches {aff.institution}; {when}."))
-                    elif match and recent and not m.institution and any(
-                            same_institution(x, aff.institution) for x in match.affiliations):
-                        r.findings.append(Finding(
-                            POTENTIAL, "institution", a.name,
-                            f"DBLP lists the reviewer at {match.affiliations[0]!r}; {when}. "
-                            "DBLP affiliations can be out of date."))
+                    _institution_findings(r, a, aff, m, match, domain, s)
 
             # No profile: fall back to the author's DBLP affiliation.
             elif a.person and a.person.affiliations:
                 theirs = m.institution or (match.affiliations[0] if match and match.affiliations else "")
                 for aff in a.person.affiliations:
-                    if theirs and same_institution(theirs, aff):
+                    if theirs and inst_match(theirs, aff):
                         r.findings.append(Finding(
                             POTENTIAL, "institution", a.name,
                             f"DBLP lists {a.name} at {aff!r} and the reviewer at {theirs!r}. "
@@ -281,6 +297,39 @@ def check(db: DBLP, authors: list[Author], members: list[PCMember],
 
     results.sort(key=lambda r: (-_RANK[r.level], r.member.name.casefold()))
     return results
+
+
+def _institution_findings(r: Result, a: Author, aff, m: PCMember, match: Person | None,
+                          domain: str, s: Settings) -> None:
+    recent = aff.active_since(s.institution_cutoff)
+    level = CONFLICT if recent else POTENTIAL
+    when = f"{a.name} was there {aff.span()}"
+    strength = inst_match(m.institution, aff.institution) if m.institution else None
+    if strength == "same":
+        r.findings.append(Finding(
+            level, "institution", a.name,
+            f"Reviewer lists {m.institution!r}; {when} ({aff.institution})."))
+    elif domain and any(domain_matches(domain, d) for d in aff.domains):
+        r.findings.append(Finding(
+            level, "email-domain", a.name,
+            f"Reviewer email domain {domain} matches {aff.institution}; {when}."))
+    elif strength == "related":
+        r.findings.append(Finding(
+            POTENTIAL, "institution", a.name,
+            f"Reviewer lists {m.institution!r}, related to {aff.institution!r} (another site, "
+            f"lab or campus); {when}."))
+    elif match and recent and not m.institution and any(
+            inst_match(x, aff.institution) for x in match.affiliations):
+        r.findings.append(Finding(
+            POTENTIAL, "institution", a.name,
+            f"DBLP lists the reviewer at {match.affiliations[0]!r}; {when}. "
+            "DBLP affiliations can be out of date."))
+    if match and recent:
+        former = [x for x in match.former_affiliations if inst_match(x, aff.institution)]
+        if former:
+            r.findings.append(Finding(
+                POTENTIAL, "institution", a.name,
+                f"DBLP lists the reviewer as formerly at {former[0]!r} (dates not given); {when}."))
 
 
 def summarize(results: list[Result]) -> dict:

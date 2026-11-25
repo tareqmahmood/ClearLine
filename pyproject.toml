@@ -32,5 +32,10 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 110
 
+[tool.ruff.lint]
+# Bad user input of any kind (wrong value or wrong type) is reported as ValueError,
+# which the CLI and the server turn into a readable message.
+ignore = ["TRY004"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

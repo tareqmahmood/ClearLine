@@ -55,18 +55,34 @@ class MissingDatabase(RuntimeError):
     pass
 
 
+class OutdatedDatabase(MissingDatabase):
+    pass
+
+
 class DBLP:
     def __init__(self, path: Path):
         if not Path(path).exists():
             raise MissingDatabase(
                 f"No DBLP database at {path}. Run `clearline setup` to download and import DBLP.")
         self.path = Path(path)
-        from .dblp_import import upgrade
-        upgrade(self.path)
         self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._check_schema()
         self.person = lru_cache(maxsize=4096)(self._person)
         self.coauthors = lru_cache(maxsize=256)(self._coauthors)
+
+    def _check_schema(self) -> None:
+        from .dblp_import import SCHEMA_VERSION
+
+        try:
+            version = int(self.meta().get("schema", 0))
+        except (sqlite3.DatabaseError, ValueError):
+            version = 0
+        if version < SCHEMA_VERSION:
+            self.conn.close()
+            raise OutdatedDatabase(
+                f"The DBLP database at {self.path} was built by an older ClearLine. "
+                "Run `clearline setup` to import it again (the downloaded dump is reused).")
 
     def meta(self) -> dict:
         return {r["key"]: r["value"] for r in self.conn.execute("SELECT key, value FROM meta")}
@@ -78,42 +94,59 @@ class DBLP:
         p = Person(row["id"], row["pid"], row["name"])
         p.aliases = [r[0] for r in self.conn.execute(
             "SELECT name FROM names WHERE person_id=? ORDER BY id", (person_id,))]
-        for r in self.conn.execute(
-                "SELECT text, former FROM affiliations WHERE person_id=? ORDER BY rowid", (person_id,)):
-            (p.former_affiliations if r["former"] else p.affiliations).append(r["text"])
+        p.affiliations, p.former_affiliations = self.affiliations_of([person_id]).get(person_id, ([], []))
         stats = self.conn.execute(
             "SELECT count(*), max(p.year) FROM names n JOIN authorship a ON a.name_id=n.id "
             "JOIN pubs p ON p.id=a.pub_id WHERE n.person_id=?", (person_id,)).fetchone()
         p.n_pubs, p.last_year = stats[0], stats[1]
         return p
 
-    def find(self, name: str, limit: int = 25) -> list[Person]:
-        """People whose name (or an alias) matches. Falls back to first+last name."""
-        ids = self._ids("norm", norm_name(name), limit)
-        if not ids:
-            ids = self._ids("short", short_key(name), limit)
-        people = [self.person(i) for i in ids]
-        return sorted((p for p in people if p), key=lambda p: -p.n_pubs)
+    def affiliations_of(self, ids: list[int]) -> dict[int, tuple[list[str], list[str]]]:
+        """person id -> (current affiliations, former affiliations), for many people at once."""
+        out: dict[int, tuple[list[str], list[str]]] = {}
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            rows = self.conn.execute(
+                f"SELECT person_id, text, former FROM affiliations WHERE person_id IN "
+                f"({','.join('?' * len(chunk))}) ORDER BY rowid", chunk)
+            for r in rows:
+                cur, old = out.setdefault(r["person_id"], ([], []))
+                (old if r["former"] else cur).append(r["text"])
+        return out
 
-    def find_loose(self, name: str, limit: int = 50) -> list[Person]:
-        """Forgiving lookup for names that `find` misses: nicknames, umlaut spellings,
-        reversed order, and names given with an initial ('J. Doe')."""
+    # Candidate lookups return every matching person id, never a truncated list:
+    # DBLP has hundreds of people named "Wei Wang", and any of them may be a coauthor.
+    def ids_exact(self, name: str) -> list[int]:
+        return self._ids("norm", norm_name(name))
+
+    def ids_short(self, name: str) -> list[int]:
+        """Same first and last name, ignoring middle names ('Michael J. Franklin')."""
+        return self._ids("short", short_key(name))
+
+    def ids_loose(self, name: str) -> list[int]:
+        """Nicknames, umlaut spellings, reversed order, or an initial ('J. Doe')."""
         if starts_with_initial(name):
-            ids = self._ids("initial", initial_key(name), limit)
-        else:
-            ids = self._ids("loose", loose_key(name), limit)
-        people = [self.person(i) for i in ids]
-        return sorted((p for p in people if p), key=lambda p: -p.n_pubs)
+            return self._ids("initial", initial_key(name))
+        return self._ids("loose", loose_key(name))
 
-    def _ids(self, column: str, key: str, limit: int) -> list[int]:
+    def _ids(self, column: str, key: str) -> list[int]:
         if not key:
             return []
-        rows = self.conn.execute(
-            f"SELECT DISTINCT person_id FROM names WHERE {column}=? LIMIT ?", (key, limit))
+        rows = self.conn.execute(f"SELECT DISTINCT person_id FROM names WHERE {column}=?", (key,))
         return [r[0] for r in rows]
 
+    def find(self, name: str, limit: int = 50) -> list[Person]:
+        """People to show for a search, most published first."""
+        ids = self.ids_exact(name) or self.ids_short(name) or self.ids_loose(name)
+        people = [p for p in (self.person(i) for i in ids[:1000]) if p]
+        return sorted(people, key=lambda p: -p.n_pubs)[:limit]
+
     def resolve(self, ident: str) -> Person | None:
-        """A DBLP pid ('123/4567'), profile URL, or exact DBLP name ('Wei Wang 0001')."""
+        """A DBLP pid ('123/4567'), profile URL, or exact DBLP name ('Wei Wang 0001').
+
+        Returns None when the name is ambiguous, including DBLP's unsuffixed name for
+        papers it has not assigned to anyone ("Wei Wang" next to "Wei Wang 0001").
+        """
         ident = ident.strip()
         for prefix in ("https://dblp.org/pid/", "http://dblp.org/pid/",
                        "https://dblp.org/pers/", "dblp.org/pid/"):
@@ -123,11 +156,15 @@ class DBLP:
             row = self.conn.execute("SELECT id FROM persons WHERE pid=?", (ident,)).fetchone()
             if row:
                 return self.person(row[0])
-        row = self.conn.execute("SELECT person_id FROM names WHERE name=?", (ident,)).fetchone()
+        row = self.conn.execute(
+            "SELECT n.person_id, p.pid FROM names n JOIN persons p ON p.id=n.person_id "
+            "WHERE n.name=?", (ident,)).fetchone()
+        if row and (row["pid"] or len(self.ids_exact(ident)) == 1):
+            return self.person(row["person_id"])
         if row:
-            return self.person(row[0])
-        matches = self.find(ident)
-        return matches[0] if len(matches) == 1 else None
+            return None
+        ids = self.ids_exact(ident) or self.ids_short(ident)
+        return self.person(ids[0]) if len(ids) == 1 else None
 
     def _coauthors(self, person_id: int) -> dict[int, list[Paper]]:
         """Every coauthor of person_id with the papers they share, newest first."""

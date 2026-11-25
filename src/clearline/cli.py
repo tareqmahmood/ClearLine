@@ -54,8 +54,10 @@ def cmd_setup(args) -> int:
 
 
 def cmd_refresh(args) -> int:
-    dump = home() / "dblp.xml.gz"
-    dump.unlink(missing_ok=True)
+    from .dblp_import import download
+
+    # download() replaces the old dump only once the new one is complete and verified.
+    download(home() / "dblp.xml.gz")
     args.dump, args.reuse = None, True
     return cmd_setup(args)
 
@@ -138,7 +140,10 @@ def cmd_profile_new(args) -> int:
 
 
 def cmd_profile_list(args) -> int:
-    profiles = store().list()
+    st = store()
+    profiles = st.list()
+    for path, error in st.errors:
+        print(f"warning: skipped {path.name}: {error}", file=sys.stderr)
     if not profiles:
         print("No profiles yet. Run `clearline profile new` or use `clearline serve`.")
     for p in profiles:
@@ -166,12 +171,16 @@ def cmd_check(args) -> int:
         print("No names found in the reviewer list.", file=sys.stderr)
         return 1
     db = DBLP(db_path())
-    profiles = [store().load(p) for p in args.profile]
+    st = store()
+    profiles = [st.load_file(Path(p)) if p.endswith(".toml") else st.load(p) for p in args.profile]
     if not profiles and not args.author:
-        profiles = store().list()[:1]
-        if not profiles:
-            print("Give --profile or --author (or create a profile first).", file=sys.stderr)
+        available = st.list()
+        if len(available) != 1:
+            names = ", ".join(p.slug for p in available) or "none yet"
+            print(f"Choose the paper's authors with --profile (profiles: {names}) "
+                  "or --author.", file=sys.stderr)
             return 1
+        profiles = available
     authors, warnings = build_authors(db, profiles, args.author)
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
@@ -249,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("check", help="check a pasted reviewer list for conflicts")
     p.add_argument("pclist", help="file with one reviewer per line, or - for stdin")
     p.add_argument("--profile", "-p", action="append", default=[],
-                   help="author profile (repeat for each author who has one)")
+                   help="author profile name or .toml file (repeat for each author who has one)")
     p.add_argument("--author", "-a", action="append", default=[],
                    help="coauthor without a profile: DBLP pid, URL, or exact DBLP name")
     p.add_argument("--coauthor-years", type=int, default=2)
@@ -270,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         return args.func(args)
-    except (MissingDatabase, FileNotFoundError, ValueError) as e:
+    except (MissingDatabase, FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

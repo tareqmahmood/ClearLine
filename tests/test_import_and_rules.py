@@ -13,7 +13,7 @@ def by_name(results):
 
 def test_import_counts_and_entities(db):
     meta = db.meta()
-    assert meta["publications"] == "4"  # proceedings volumes are not coauthorship
+    assert meta["publications"] == "7"  # proceedings volumes are not coauthorship
     assert db.find("Jurgen Muller")[0].name == "Jürgen Müller"
 
 
@@ -22,14 +22,16 @@ def test_aliases_and_homonyms(db):
     assert set(alice.aliases) == {"Alice Ames", "A. Alice"}
     assert alice.affiliations == ["University of Wisconsin-Madison, USA"]
     assert alice.former_affiliations == ["Stanford University, USA"]
-    assert {p.name for p in db.find("Wei Wang")} == {"Wei Wang 0001", "Wei Wang 0002"}
+    # The bare "Wei Wang" holds papers DBLP has not assigned to anyone yet.
+    assert {p.name for p in db.find("Wei Wang")} == {"Wei Wang", "Wei Wang 0001", "Wei Wang 0002"}
     assert db.resolve("https://dblp.org/pid/3/w2.html").name == "Wei Wang 0002"
 
 
 def test_coauthors_merge_aliases(db):
     alice = db.resolve("1/alice")
     co = {db.person(pid).name: papers for pid, papers in db.coauthors(alice.id).items()}
-    assert set(co) == {"Bob Brown", "Jürgen Müller", "Wei Wang 0002", "Dan Dorsey"}
+    assert set(co) == {"Bob Brown", "Jürgen Müller", "Wei Wang 0002", "Dan Dorsey",
+                       "Michael J. Franklin", "Lei Zhang 0030"}
     assert co["Jürgen Müller"][0].year == 2015
     assert "Carol Chen" not in co  # only co-editors
 
@@ -57,17 +59,20 @@ def test_ambiguous_name_resolved_by_institution(db):
     assert r["Wei Wang"].match.name == "Wei Wang 0002"
     assert r["Wei Wang"].level == CONFLICT
 
+    # Matched to the UCLA Wei Wang, but the UNSW Wei Wang (a coauthor) is still reported.
     r, _ = run(db, [PCMember("", "Wei Wang", "UCLA")], ids=["1/alice"])
     assert r["Wei Wang"].match.name == "Wei Wang 0001"
-    assert r["Wei Wang"].level == "clear"
+    assert r["Wei Wang"].level == POTENTIAL
+    assert [f.kind for f in r["Wei Wang"].findings] == ["namesake"]
 
 
 def test_ambiguous_name_without_institution_is_potential(db):
     r, _ = run(db, [PCMember("", "Wei Wang")], ids=["1/alice"])
     assert r["Wei Wang"].match is None
-    assert len(r["Wei Wang"].candidates) == 2
+    assert r["Wei Wang"].n_namesakes == 3
+    assert [c.name for c in r["Wei Wang"].candidates] == ["Wei Wang 0002"]
     assert r["Wei Wang"].level == POTENTIAL
-    assert r["Wei Wang"].findings[0].kind == "ambiguous-name"
+    assert r["Wei Wang"].findings[0].kind == "namesake"
 
 
 def test_profile_institution_domain_and_relations(db):
@@ -102,4 +107,4 @@ def test_reviewer_who_is_an_author(db):
 
 def test_unknown_author_warns(db):
     _, warnings = run(db, [PCMember("", "Bob Brown")], ids=["Wei Wang"])
-    assert "2 DBLP people" in warnings[0]
+    assert "3 DBLP people" in warnings[0]

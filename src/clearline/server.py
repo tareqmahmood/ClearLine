@@ -37,15 +37,19 @@ class App:
             meta, error = self.db.meta(), None
         except MissingDatabase as e:
             meta, error = None, str(e)
-        return {"db": meta, "db_error": error, "home": str(self.home),
-                "profiles": [p.to_dict() for p in self.store.list()]}
+        profiles = [p.to_dict() for p in self.store.list()]
+        return {"db": meta, "db_error": error, "home": str(self.home), "profiles": profiles,
+                "profile_errors": [f"{f.name}: {e}" for f, e in self.store.errors]}
 
     def search(self, q: str) -> list[dict]:
         return [p.to_dict() for p in self.db.find(q)] if q.strip() else []
 
     def save_profile(self, body: dict) -> dict:
-        old_slug = body.get("slug") or ""
+        old_slug = str(body.get("slug") or "")
         profile = Profile.from_dict(body, slug=old_slug)
+        if not old_slug and self.store.path(profile.name).exists():
+            raise ValueError(f"A profile named {profile.name!r} already exists. Open it from the "
+                             "list to edit it, or use a different name.")
         path = self.store.save(profile)
         return {"profile": profile.to_dict(), "path": str(path)}
 
@@ -53,21 +57,43 @@ class App:
         members = parse(body.get("pclist", ""))
         if not members:
             raise ValueError("Paste at least one reviewer name.")
-        profiles = [self.store.load(s) for s in body.get("profiles", [])]
-        ids = [a for a in body.get("authors", []) if a.strip()]
+        profiles = [self.store.load(str(s)) for s in _list(body, "profiles")]
+        ids = [str(a) for a in _list(body, "authors") if str(a).strip()]
         if not profiles and not ids:
             raise ValueError("Choose at least one author profile or add a DBLP author.")
-        s = body.get("settings", {})
+        s = body.get("settings") or {}
+        if not isinstance(s, dict):
+            raise ValueError("settings must be an object.")
         settings = Settings(
-            coauthor_years=int(s.get("coauthor_years", 2)),
-            institution_years=int(s.get("institution_years", 2)),
-            max_authors=int(s.get("max_authors", 30)),
-            as_of=parse_month(s["as_of"]) if s.get("as_of") else dt.date.today())
+            coauthor_years=_int(s, "coauthor_years", 2, "Coauthored within"),
+            institution_years=_int(s, "institution_years", 2, "Same institution within"),
+            max_authors=_int(s, "max_authors", 30, "Ignore papers with more than"),
+            as_of=parse_month(str(s["as_of"])) if s.get("as_of") else dt.date.today())
         authors, warnings = build_authors(self.db, profiles, ids)
         results = check(self.db, authors, members, settings)
         return {"settings": settings.to_dict(), "warnings": warnings,
                 "authors": [a.to_dict() for a in authors], "summary": summarize(results),
                 "results": [r.to_dict() for r in results]}
+
+
+def _list(body: dict, key: str) -> list:
+    value = body.get(key) or []
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list.")
+    return value
+
+
+def _int(settings: dict, key: str, default: int, label: str) -> int:
+    value = settings.get(key)
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        raise ValueError(f"{label}: expected a whole number, got {value!r}.") from None
+    if n < 0:
+        raise ValueError(f"{label}: must not be negative.")
+    return n
 
 
 def _make_handler(app: App, port: int):
@@ -102,7 +128,13 @@ def _make_handler(app: App, port: int):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("Expected JSON.")
             n = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(n) or b"{}")
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except json.JSONDecodeError:
+                raise ValueError("Request body is not valid JSON.") from None
+            if not isinstance(body, dict):
+                raise ValueError("Request body must be a JSON object.")
+            return body
 
         def _route(self, method: str):
             if not self._trusted():
@@ -125,8 +157,10 @@ def _make_handler(app: App, port: int):
                 if method == "POST" and url.path == "/api/check":
                     return self._json(app.check(self._body()))
                 return self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
-            except (ValueError, FileNotFoundError, MissingDatabase, KeyError) as e:
+            except (ValueError, FileNotFoundError, MissingDatabase) as e:
                 return self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+            except Exception as e:  # noqa: BLE001 - never drop the connection without an answer
+                return self._json({"error": f"Internal error: {e}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def do_GET(self):
             self._route("GET")

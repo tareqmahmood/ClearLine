@@ -17,12 +17,13 @@ import io
 import re
 from dataclasses import dataclass
 
-from .names import flip_comma_name
+from .names import flip_comma_name, fold, norm_name
 
 EMAIL = re.compile(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+")
 ORG_WORDS = re.compile(
-    r"\b(univ\w*|institut\w*|college|school|lab\w*|research|center|centre|inc|ltd|llc|"
-    r"corp\w*|gmbh|company|technolog\w*|polytechn\w*|academy|hospital|foundation|"
+    r"\b(univ\w*|institut\w*|college|school|labs?|laborator\w*|research|center|centre|inc|"
+    r"ltd|llc|corp|corporation|gmbh|company|technolog\w*|polytechn\w*|academy|hospital|"
+    r"foundation|"
     r"google|microsoft|amazon|meta|ibm|oracle|alibaba|huawei|tencent|databricks|"
     r"snowflake|sap|intel|nvidia|apple|bytedance|baidu|adobe|salesforce|"
     r"ETH|EPFL|MIT|CMU|KAIST|INRIA|CNRS|CWI|MPI|NUS|NTU|HKUST|IISc|IIT)\b",
@@ -30,7 +31,10 @@ ORG_WORDS = re.compile(
 HEADER_WORDS = {"name", "first name", "last name", "email", "e-mail", "organization",
                 "organisation", "affiliation", "institution", "conflict", "conflicts",
                 "select", "reviewer", "role", "country", "domain"}
-CHECKBOX = re.compile(r"^[\s☐☑✓✔□■\[\]xX*•·-]+(?=\S)")
+# One leading tick mark copied with the row: "[x] ", "[ ]", "☐", "✓", "* ", "- ".
+CHECKBOX = re.compile(r"^\s*(?:\[[ xX✓✔]?\]|[☐☑✓✔□■•·*]|-(?=\s))\s*")
+NAME_PARTICLES = {"van", "von", "de", "der", "den", "da", "di", "del", "du", "le", "la",
+                  "dos", "das", "ter", "ten"}
 
 
 @dataclass
@@ -76,20 +80,30 @@ def parse_line(line: str) -> PCMember | None:
 
     institution = ""
     m = re.match(r"^(.*?)\s*[(\[](.+)[)\]]\s*$", text)  # Name (Institution)
+    dash = re.search(r"\s[-–—|]\s", text)
+    comma = text.find(",")
     if m:
         text, institution = m[1], m[2]
-    elif re.search(r"\s[-–—|]\s", text):  # Name - Institution
-        text, institution = re.split(r"\s[-–—|]\s", text, maxsplit=1)
-    elif "," in text:
-        head, tail = (p.strip() for p in text.split(",", 1))
-        if _looks_like_org(tail) or len(tail.split()) > 2:
-            text, institution = head, tail  # Name, Institution
-        else:
-            text = flip_comma_name(text)  # Doe, Jane
+    elif dash and (comma < 0 or dash.start() < comma):  # Name - Institution, Place
+        text, institution = text[:dash.start()], text[dash.end():]
+    elif comma >= 0:
+        text, institution = _split_comma(text)
     name = _clean(text)
     if not name or name.casefold() in HEADER_WORDS:
         return None
     return PCMember(raw=raw, name=name, institution=_clean(institution), email=email)
+
+
+def _split_comma(text: str) -> tuple[str, str]:
+    """'Jane Doe, Stanford' -> name and institution; 'Doe, Jane[, Inst]' -> 'Jane Doe'."""
+    parts = [p.strip() for p in text.split(",")]
+    head, rest = parts[0], parts[1:]
+    head_words = head.split()
+    surname_first = len(head_words) == 1 or (
+        head_words and head_words[0].casefold() in NAME_PARTICLES and len(rest[0].split()) == 1)
+    if surname_first and rest and _looks_like_name_part(rest[0]):
+        return f"{rest[0]} {head}", ", ".join(rest[1:])
+    return head, ", ".join(rest)
 
 
 def _parse_fields(raw: str, fields: list[str]) -> PCMember | None:
@@ -121,7 +135,8 @@ def parse(text: str) -> list[PCMember]:
         member = parse_line(line)
         if member is None:
             continue
-        key = (member.name.casefold(), member.email.casefold())
+        # Two reviewers can share a name; only identical people are dropped.
+        key = (norm_name(member.name), fold(member.institution), member.email.casefold())
         if key not in seen:
             seen.add(key)
             out.append(member)

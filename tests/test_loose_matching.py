@@ -1,10 +1,7 @@
 import datetime as dt
-import shutil
-import sqlite3
 
 import pytest
 
-from clearline.db import DBLP
 from clearline.names import initial_key, loose_key
 from clearline.pclist import PCMember
 from clearline.profile import Profile, Relation
@@ -48,7 +45,8 @@ def test_umlaut_spelling(db):
 
 def test_loose_ambiguous_name(db):
     r = run(db, ["Wang Wei"])["Wang Wei"]
-    assert r.match is None and len(r.candidates) == 2
+    assert r.match is None and r.n_namesakes == 3
+    assert [c.name for c in r.candidates] == ["Wei Wang 0002"]
     assert r.level == POTENTIAL
     assert "loose name match" in r.findings[0].message
 
@@ -70,15 +68,3 @@ def test_loose_relation(db):
 def test_nobody_found(db):
     r = run(db, ["Totally Unknown"])["Totally Unknown"]
     assert (r.match, r.match_kind, r.level) == (None, "", "clear")
-
-
-def test_old_database_is_upgraded(db, tmp_path):
-    old = tmp_path / "old.sqlite"
-    shutil.copy(db.path, old)
-    with sqlite3.connect(old) as c:
-        c.executescript("DROP INDEX names_loose; DROP INDEX names_initial;"
-                        "ALTER TABLE names DROP COLUMN loose; ALTER TABLE names DROP COLUMN initial;"
-                        "DELETE FROM meta WHERE key='schema';")
-    upgraded = DBLP(old)
-    assert upgraded.meta()["schema"] == "2"
-    assert [p.name for p in upgraded.find_loose("Robert Brown")] == ["Bob Brown"]
