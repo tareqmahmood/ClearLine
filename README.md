@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.svg" alt="ClearLine: find your conflicts of interest with reviewers" width="100%">
+</p>
+
 # ClearLine
 
 Find your conflicts of interest with a venue's reviewers, without scrolling

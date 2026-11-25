@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+  <title id="title">ClearLine</title>
+  <desc id="desc">ClearLine, an open-source conflict-of-interest checker. A line runs from the name into a reviewer list, separating conflicts from clear reviewers.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1322"/>
+      <stop offset="1" stop-color="#17213a"/>
+    </linearGradient>
+    <linearGradient id="line" x1="72" y1="0" x2="1216" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7c9cff" stop-opacity="0.15"/>
+      <stop offset="0.35" stop-color="#7c9cff"/>
+      <stop offset="1" stop-color="#6fd39a"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#9db4ff"/>
+      <stop offset="1" stop-color="#6fd39a"/>
+    </linearGradient>
+    <filter id="glow" x="-5%" y="-400%" width="110%" height="900%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#ffffff" fill-opacity="0.05"/>
+    </pattern>
+  </defs>
+
+  <!-- background -->
+  <rect width="1280" height="400" rx="20" fill="url(#bg)"/>
+  <rect width="1280" height="400" rx="20" fill="url(#dots)"/>
+
+  <!-- left: wordmark -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="72" y="150" font-size="13" font-weight="700" letter-spacing="2.6" fill="#7c9cff">OPEN-SOURCE COI CHECKER</text>
+    <text x="68" y="222" font-size="78" font-weight="800" letter-spacing="-1.5" fill="#f3f5fb">Clear<tspan fill="url(#word)">Line</tspan></text>
+    <text x="72" y="292" font-size="22" fill="#c6cddd">Find your conflicts of interest with reviewers.</text>
+    <text x="72" y="324" font-size="17" fill="#8892ab">DBLP coauthorship + your affiliation history · runs locally · MIT</text>
+  </g>
+
+  <!-- right: reviewer card -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <rect x="748" y="60" width="468" height="280" rx="14" fill="#1a2540" stroke="#2b3858"/>
+    <text x="772" y="94" font-size="15" font-weight="700" fill="#e6e9f2">Reviewers</text>
+    <text x="1192" y="94" font-size="13" fill="#8892ab" text-anchor="end">2 conflicts · 1 potential · 2 clear</text>
+    <line x1="748" y1="110" x2="1216" y2="110" stroke="#2b3858"/>
+
+    <!-- conflict -->
+    <g transform="translate(0,140)">
+      <rect x="772" y="-8" width="16" height="16" rx="4" fill="#7c9cff"/>
+      <path d="M776 0 l3 3 l6 -6" fill="none" stroke="#0d1322" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="806" y="-10" width="128" height="9" rx="4.5" fill="#d6dcea"/>
+      <rect x="806" y="4" width="176" height="7" rx="3.5" fill="#56627f"/>
+      <rect x="1106" y="-11" width="86" height="22" rx="11" fill="#ff7b7b" fill-opacity="0.16"/>
+      <text x="1149" y="4" font-size="11" font-weight="700" letter-spacing="1" fill="#ff7b7b" text-anchor="middle">CONFLICT</text>
+    </g>
+    <g transform="translate(0,178)">
+      <rect x="772" y="-8" width="16" height="16" rx="4" fill="#7c9cff"/>
+      <path d="M776 0 l3 3 l6 -6" fill="none" stroke="#0d1322" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="806" y="-10" width="98" height="9" rx="4.5" fill="#d6dcea"/>
+      <rect x="806" y="4" width="138" height="7" rx="3.5" fill="#56627f"/>
+      <rect x="1106" y="-11" width="86" height="22" rx="11" fill="#ff7b7b" fill-opacity="0.16"/>
+      <text x="1149" y="4" font-size="11" font-weight="700" letter-spacing="1" fill="#ff7b7b" text-anchor="middle">CONFLICT</text>
+    </g>
+    <!-- potential -->
+    <g transform="translate(0,216)">
+      <rect x="772.75" y="-7.25" width="14.5" height="14.5" rx="3.5" fill="none" stroke="#4a5880" stroke-width="1.5"/>
+      <rect x="806" y="-10" width="146" height="9" rx="4.5" fill="#d6dcea"/>
+      <rect x="806" y="4" width="112" height="7" rx="3.5" fill="#56627f"/>
+      <rect x="1094" y="-11" width="98" height="22" rx="11" fill="#f2b84b" fill-opacity="0.16"/>
+      <text x="1143" y="4" font-size="11" font-weight="700" letter-spacing="1" fill="#f2b84b" text-anchor="middle">POTENTIAL</text>
+    </g>
+    <!-- clear -->
+    <g transform="translate(0,276)" opacity="0.75">
+      <rect x="772.75" y="-7.25" width="14.5" height="14.5" rx="3.5" fill="none" stroke="#4a5880" stroke-width="1.5"/>
+      <rect x="806" y="-10" width="112" height="9" rx="4.5" fill="#aab3c8"/>
+      <rect x="806" y="4" width="150" height="7" rx="3.5" fill="#46516b"/>
+      <rect x="1122" y="-11" width="70" height="22" rx="11" fill="#6fd39a" fill-opacity="0.13"/>
+      <text x="1157" y="4" font-size="11" font-weight="700" letter-spacing="1" fill="#6fd39a" text-anchor="middle">CLEAR</text>
+    </g>
+    <g transform="translate(0,314)" opacity="0.75">
+      <rect x="772.75" y="-7.25" width="14.5" height="14.5" rx="3.5" fill="none" stroke="#4a5880" stroke-width="1.5"/>
+      <rect x="806" y="-10" width="88" height="9" rx="4.5" fill="#aab3c8"/>
+      <rect x="806" y="4" width="164" height="7" rx="3.5" fill="#46516b"/>
+      <rect x="1122" y="-11" width="70" height="22" rx="11" fill="#6fd39a" fill-opacity="0.13"/>
+      <text x="1157" y="4" font-size="11" font-weight="700" letter-spacing="1" fill="#6fd39a" text-anchor="middle">CLEAR</text>
+    </g>
+  </g>
+
+  <!-- the clear line: from the wordmark into the card, between conflicts and clear reviewers -->
+  <line x1="72" y1="246" x2="1216" y2="246" stroke="url(#line)" stroke-width="6" filter="url(#glow)" opacity="0.7"/>
+  <line x1="72" y1="246" x2="1216" y2="246" stroke="url(#line)" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
